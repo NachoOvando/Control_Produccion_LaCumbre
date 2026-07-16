@@ -1,0 +1,536 @@
+// =============================================================================
+// PLATAFORMA INDUSTRIAL LA CUMBRE — Schema de Base de Datos
+// =============================================================================
+//
+// PATRÓN DE EXTENSIBILIDAD: tabla estructural + JSONB validado por esquema
+// -----------------------------------------------------------------------
+// El núcleo de este schema está diseñado para ser INMUTABLE ante la adición
+// de nuevos puntos de control, módulos o lógica de negocio.
+//
+// REGLA FUNDAMENTAL:
+//   - NUNCA crear una tabla nueva por cada punto de control de calidad.
+//   - Para agregar un nuevo punto de control (ej. "Control de Peso de Relleno"):
+//       1. Insertar una fila en `puntos_control` con su JSON Schema en schema_json.
+//       2. Asociar el punto a las líneas productivas via `puntos_control_lineas`.
+//       3. Correr `npm run db:views` para regenerar la vista analítica.
+//       4. Cero migraciones. Cero tablas nuevas. Cero cambios en registros_calidad.
+//
+// ARQUITECTURA CQRS LIGERA:
+//   - Escritura: registros_calidad.data (JSONB flexible, validado por AJV contra schema_json)
+//   - Lectura analítica: vistas SQL generadas automáticamente (una por punto de control)
+//     listas para conectar desde Power BI sin transformación adicional.
+//
+// VER: docs/architecture.md para decisiones de diseño completas.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// -----------------------------------------------------------------------------
+// MÓDULO: Usuarios y autenticación
+// -----------------------------------------------------------------------------
+
+enum Rol {
+  admin
+  jefe_planta
+  gerencia
+  supervisor_calidad
+  operador_calidad
+  supervisor_produccion
+  operador_produccion
+  supervisor_deposito
+  operador_deposito
+  compras
+}
+
+model Usuario {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String   @unique
+  nombre    String
+  password  String
+  rol       Rol      @default(operador_calidad)
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  registros          RegistroCalidad[]
+  registrosEliminados RegistroCalidad[] @relation("RegistroEliminado")
+  auditorias         AuditoriaRegistro[]
+  loteEstadoLogs     LoteEstadoLog[]
+  lotesCreados       Lote[] @relation("LoteCreadoPor")
+  lineasActivadas    LineaProduccionEstado[]
+  activacionesLinea  LineaActivacionLog[]
+  accounts           Account[]
+  sessions           Session[]
+
+  @@map("usuarios")
+}
+
+model Account {
+  id                String  @id @default(uuid()) @db.Uuid
+  userId            String  @db.Uuid @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user Usuario @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(uuid()) @db.Uuid
+  sessionToken String   @unique @map("session_token")
+  userId       String   @db.Uuid @map("user_id")
+  expires      DateTime
+  user         Usuario  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// -----------------------------------------------------------------------------
+// MÓDULO: Turnos de producción
+// Dimensión crítica para cálculo de OEE y KPIs por turno.
+// La asignación de turno se hace automáticamente en la capa de servicio
+// comparando la hora del registro con los rangos definidos aquí.
+// -----------------------------------------------------------------------------
+
+model Turno {
+  id         String   @id @default(uuid()) @db.Uuid
+  nombre     String   @unique        // "Mañana", "Tarde", "Noche"
+  horaInicio String   @map("hora_inicio") // "06:00" — 24h format HH:MM
+  horaFin    String   @map("hora_fin")    // "14:00" — puede cruzar medianoche (ej. Noche: 22:00-06:00)
+  activo     Boolean  @default(true)
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  registros RegistroCalidad[]
+
+  @@map("turnos")
+}
+
+// -----------------------------------------------------------------------------
+// MÓDULO: Maestros de datos
+// -----------------------------------------------------------------------------
+
+// La línea de negocio es atributo de la MARCA (relación comercial con su dueño),
+// no del producto — requisito del negocio: distinguirla desde el modelo de datos.
+enum LineaNegocio {
+  marca_propia
+  copacker_arcor
+  fason_terceros
+}
+
+model Marca {
+  id           String       @id @default(uuid()) @db.Uuid
+  nombre       String       @unique // "GOAT", "LC", "CARREFOUR"...
+  lineaNegocio LineaNegocio @map("linea_negocio")
+  activa       Boolean      @default(true)
+  createdAt    DateTime     @default(now()) @map("created_at")
+
+  productos Producto[]
+
+  @@map("marcas")
+}
+
+// Familia de productos del maestro ("ALFAJOR NEGRO", "TAPAS", "BUDIN EUR"...).
+// Tabla y no enum: crecen con el catálogo y los puntos de control las referencian.
+model Familia {
+  id     String  @id @default(uuid()) @db.Uuid
+  slug   String  @unique // "alfajor_negro", "tapas" — clave de UI y dispatch de forms
+  nombre String  @unique // como viene del maestro
+  activa Boolean @default(true)
+
+  productos     Producto[]
+  puntosControl PuntoControlFamilia[]
+
+  @@map("familias")
+}
+
+// Qué familias aplican a cada punto de control (reemplaza el hardcodeo del frontend).
+model PuntoControlFamilia {
+  puntoControlId String @db.Uuid @map("punto_control_id")
+  familiaId      String @db.Uuid @map("familia_id")
+
+  puntoControl PuntoControl @relation(fields: [puntoControlId], references: [id], onDelete: Cascade)
+  familia      Familia      @relation(fields: [familiaId], references: [id], onDelete: Cascade)
+
+  @@id([puntoControlId, familiaId])
+  @@map("puntos_control_familias")
+}
+
+enum UnidadRendimiento {
+  unidades_hora // "Unidades/Hr"
+  cajas_amasijo // "Caja/Amasijo"
+}
+
+// Maestro de productos — estructura alineada al Excel real (hoja BD).
+// "Descripción Nueva (Std)" = "Familia; Gusto; Marca; Peso; Unid/caja" se descompone
+// en el import; `nombre` conserva el string completo como display.
+model Producto {
+  id                 String             @id @default(uuid()) @db.Uuid
+  // Nullable: 34/104 productos del maestro no tienen código. UNIQUE admite múltiples NULL.
+  sku                String?            @unique
+  nombre             String             @unique
+  familiaId          String             @db.Uuid @map("familia_id")
+  marcaId            String             @db.Uuid @map("marca_id")
+  lineaProductivaId  String?            @db.Uuid @map("linea_productiva_id")
+  gusto              String?
+  pesoGramos         Decimal?           @map("peso_gramos") @db.Decimal(8, 2)
+  // Decimal: los semielaborados traen valores no enteros (TAPAS = 751,87)
+  unidadesPorCaja    Decimal?           @map("unidades_por_caja") @db.Decimal(8, 2)
+  rendimientoTeorico Decimal?           @map("rendimiento_teorico") @db.Decimal(10, 2)
+  unidadRendimiento  UnidadRendimiento? @map("unidad_rendimiento")
+  cajasPorPallet     Int?               @map("cajas_por_pallet")
+  // Vida útil en meses desde fecha de producción — origen del vencimiento de PT
+  vidaUtilMeses      Int?               @map("vida_util_meses")
+  pesoMasaCrudaG     Decimal?           @map("peso_masa_cruda_g") @db.Decimal(8, 2)
+  esSemielaborado    Boolean            @default(false) @map("es_semielaborado")
+  observaciones      String?
+  // Descripción legacy del maestro origen, solo referencia
+  descripcionVieja   String?            @map("descripcion_vieja")
+  // Template de nomenclatura de lote PT, ej. "L{yyyyMMdd}-{correlativo}"
+  nomenclaturaLote   String?            @map("nomenclatura_lote")
+  activo             Boolean            @default(true)
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+
+  familia         Familia          @relation(fields: [familiaId], references: [id])
+  marca           Marca            @relation(fields: [marcaId], references: [id])
+  lineaProductiva LineaProductiva? @relation(fields: [lineaProductivaId], references: [id])
+  lotes           Lote[]
+
+  @@index([familiaId])
+  @@index([marcaId])
+  @@index([lineaProductivaId])
+  @@map("productos")
+}
+
+enum EstadoLote {
+  en_produccion
+  en_espera
+  aprobado
+  rechazado
+  en_cuarentena
+}
+
+// Lote tiene FK opcional a OrdenProduccion para cuando se construya el módulo de Producción.
+// Hoy puede existir un lote sin orden (captura directa desde planta).
+model Lote {
+  id               String          @id @default(uuid()) @db.Uuid
+  numeroLote       String          @unique @map("numero_lote")
+  productoId       String          @db.Uuid @map("producto_id")
+  ordenProduccionId String?        @db.Uuid @map("orden_produccion_id") // FK a OP, opcional
+  // Nullable: lotes históricos sin línea y futuros lotes creados desde una OP
+  // pueden no tenerla seteada de entrada. Habilita el find-or-create de
+  // "producto activo por línea" (ver LineaProduccionEstado) vía el unique de abajo.
+  lineaProductivaId String?        @db.Uuid @map("linea_productiva_id")
+  fechaProduccion  DateTime        @map("fecha_produccion") @db.Date
+  estado           EstadoLote      @default(en_produccion)
+  notas            String?
+  createdAt        DateTime        @default(now()) @map("created_at")
+  // Nullable: lotes generados automáticamente (futura OP) o importados en bulk
+  // no necesariamente tienen un usuario humano detrás. Ver ADR de auditoría de Lote.
+  creadoPorId      String?         @db.Uuid @map("creado_por_id")
+
+  producto        Producto           @relation(fields: [productoId], references: [id])
+  ordenProduccion OrdenProduccion?   @relation(fields: [ordenProduccionId], references: [id])
+  lineaProductiva LineaProductiva?   @relation(fields: [lineaProductivaId], references: [id])
+  creadoPor       Usuario?           @relation("LoteCreadoPor", fields: [creadoPorId], references: [id], onDelete: SetNull)
+  registros       RegistroCalidad[]
+  estadoLogs      LoteEstadoLog[]
+  estadoDeLinea   LineaProduccionEstado?
+  activaciones    LineaActivacionLog[]
+
+  @@index([productoId])
+  // Cubre el WHERE + ORDER BY de getLotesActivos (tabla de crecimiento diario)
+  @@index([estado, fechaProduccion])
+  // Find-or-create de "producto activo por línea": NULL no colisiona contra NULL
+  // en Postgres, así que lotes históricos sin línea no rompen esta constraint.
+  @@unique([productoId, lineaProductivaId, fechaProduccion])
+  @@index([creadoPorId])
+  @@map("lotes")
+}
+
+// Puntero mutable: "qué se está produciendo AHORA en esta línea". Una fila por
+// línea (upsert en cada changeover) — es la fuente de verdad que leen los
+// formularios de captura en vez del viejo <select> por-formulario. El historial
+// de cambios vive aparte en LineaActivacionLog (esta tabla no es append-only).
+model LineaProduccionEstado {
+  lineaProductivaId String   @id @db.Uuid @map("linea_productiva_id")
+  loteActivoId      String   @unique @db.Uuid @map("lote_activo_id")
+  activadoPorId     String   @db.Uuid @map("activado_por_id")
+  activadoEn        DateTime @map("activado_en")
+
+  lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id])
+  loteActivo      Lote            @relation(fields: [loteActivoId], references: [id])
+  activadoPor     Usuario         @relation(fields: [activadoPorId], references: [id])
+
+  @@map("linea_produccion_estado")
+}
+
+// Append-only: nunca se llama update ni delete. Cada activación/changeover de
+// línea queda registrado permanentemente, incluso cuando LineaProduccionEstado
+// se sobreescribe — mismo criterio que AuditoriaRegistro/LoteEstadoLog.
+model LineaActivacionLog {
+  id                String   @id @default(uuid()) @db.Uuid
+  lineaProductivaId String   @db.Uuid @map("linea_productiva_id")
+  loteId            String   @db.Uuid @map("lote_id")
+  usuarioId         String   @db.Uuid @map("usuario_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id])
+  lote            Lote            @relation(fields: [loteId], references: [id])
+  usuario         Usuario         @relation(fields: [usuarioId], references: [id])
+
+  @@index([lineaProductivaId, createdAt])
+  @@map("linea_activacion_log")
+}
+
+// -----------------------------------------------------------------------------
+// MÓDULO: Órdenes de Producción (stub)
+// Estructura mínima para que los lotes puedan referenciar una OP.
+// El módulo completo de Producción se construirá en Fase 2.
+// Agregar campos aquí cuando se defina el alcance del módulo.
+// -----------------------------------------------------------------------------
+
+enum EstadoOP {
+  planificada
+  en_ejecucion
+  completada
+  cerrada
+  cancelada
+}
+
+model OrdenProduccion {
+  id               String    @id @default(uuid()) @db.Uuid
+  numeroOrden      String    @unique @map("numero_orden")
+  fechaPlanificada DateTime  @map("fecha_planificada") @db.Date
+  fechaInicio      DateTime? @map("fecha_inicio") @db.Date
+  fechaCierre      DateTime? @map("fecha_cierre") @db.Date
+  estado           EstadoOP  @default(planificada)
+  notas            String?
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  lotes Lote[]
+
+  @@map("ordenes_produccion")
+}
+
+// -----------------------------------------------------------------------------
+// MÓDULO: Infraestructura productiva
+// lineas_productivas es compartida por todos los módulos.
+// -----------------------------------------------------------------------------
+
+enum ModuloApp {
+  calidad
+  produccion
+  deposito
+}
+
+model LineaProductiva {
+  id          String    @id @default(uuid()) @db.Uuid
+  nombre      String    @unique
+  // Código de línea del maestro de productos (0-3)
+  codigo      Int?      @unique
+  descripcion String?
+  modulo      ModuloApp
+  activa      Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  puntosControl PuntoControlLinea[]
+  registros     RegistroCalidad[]
+  productos     Producto[]
+  lotes         Lote[]
+  estadoActual  LineaProduccionEstado?
+  activaciones  LineaActivacionLog[]
+
+  @@map("lineas_productivas")
+}
+
+model Ubicacion {
+  id       String     @id @default(uuid()) @db.Uuid
+  codigo   String     @unique
+  nombre   String
+  tipo     String
+  parentId String?    @db.Uuid @map("parent_id")
+  activa   Boolean    @default(true)
+
+  parent Ubicacion?  @relation("UbicacionJerarquia", fields: [parentId], references: [id])
+  hijos  Ubicacion[] @relation("UbicacionJerarquia")
+
+  @@map("ubicaciones")
+}
+
+// -----------------------------------------------------------------------------
+// MÓDULO: Puntos de control — el corazón del patrón de extensibilidad
+//
+// tipoFormulario: determina qué componente React se renderiza para este punto.
+// Usar el campo, nunca el nombre, para despachar formularios especializados.
+// -----------------------------------------------------------------------------
+
+enum TipoFormulario {
+  defectos_conformado
+  peso_relleno
+  peso_alfajor
+  peso_bano
+  inspeccion_visual
+  temperatura_condensacion
+  temperatura_tanques
+  detector_metales
+  fechado_envase
+  produccion_diaria
+  trazabilidad_insumos
+  generico
+}
+
+model PuntoControl {
+  id             String         @id @default(uuid()) @db.Uuid
+  nombre         String         @unique
+  descripcion    String?
+  modulo         ModuloApp
+  tipoFormulario TipoFormulario @default(generico) @map("tipo_formulario")
+  schemaJson     Json           @map("schema_json")
+  activo         Boolean        @default(true)
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  lineas    PuntoControlLinea[]
+  familias  PuntoControlFamilia[]
+  registros RegistroCalidad[]
+
+  @@map("puntos_control")
+}
+
+model PuntoControlLinea {
+  puntoControlId    String @db.Uuid @map("punto_control_id")
+  lineaProductivaId String @db.Uuid @map("linea_productiva_id")
+  orden             Int    @default(0)
+
+  puntoControl    PuntoControl    @relation(fields: [puntoControlId], references: [id], onDelete: Cascade)
+  lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id], onDelete: Cascade)
+
+  @@id([puntoControlId, lineaProductivaId])
+  @@map("puntos_control_lineas")
+}
+
+// -----------------------------------------------------------------------------
+// TABLA DE HECHOS: registros_calidad
+//
+// turnoId: asignado automáticamente por el service layer según la hora del registro.
+// fuenteOrigen: indica si el dato vino de tablet, sensor, SCADA, etc.
+//   Permite distinguir datos manuales de automáticos en reportes y auditorías.
+//   Punto de extensión para integración SCADA futura.
+// -----------------------------------------------------------------------------
+
+enum FuenteOrigen {
+  tablet
+  api_externa
+  scada_opcua
+  scada_mqtt
+  importacion
+}
+
+model RegistroCalidad {
+  id                String       @id @default(uuid()) @db.Uuid
+  puntoControlId    String       @db.Uuid @map("punto_control_id")
+  loteId            String       @db.Uuid @map("lote_id")
+  lineaProductivaId String       @db.Uuid @map("linea_productiva_id")
+  responsableId     String       @db.Uuid @map("responsable_id")
+  turnoId           String?      @db.Uuid @map("turno_id")
+  fuenteOrigen      FuenteOrigen @default(tablet) @map("fuente_origen")
+  fecha             DateTime     @db.Date
+  hora              DateTime     @db.Time(0)
+  nroMuestra        Int          @map("nro_muestra")
+  filaProd          Int?         @map("fila_prod")
+  notas             String?
+  data              Json
+  createdAt         DateTime     @default(now()) @map("created_at")
+  // Soft-delete: nunca se elimina físicamente un registro de calidad (HACCP)
+  deletedAt         DateTime?    @map("deleted_at")
+  deletedById       String?      @db.Uuid @map("deleted_by_id")
+
+  puntoControl    PuntoControl    @relation(fields: [puntoControlId], references: [id])
+  lote            Lote            @relation(fields: [loteId], references: [id])
+  lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id])
+  responsable     Usuario         @relation(fields: [responsableId], references: [id])
+  turno           Turno?          @relation(fields: [turnoId], references: [id])
+  deletedBy       Usuario?        @relation("RegistroEliminado", fields: [deletedById], references: [id])
+  auditoria       AuditoriaRegistro[]
+
+  @@unique([puntoControlId, loteId, fecha, nroMuestra, filaProd], name: "registro_unico")
+  @@index([puntoControlId, fecha])
+  @@index([loteId])
+  @@index([lineaProductivaId, fecha])
+  @@index([turnoId, fecha])
+  @@index([deletedAt])
+  @@map("registros_calidad")
+}
+
+// -----------------------------------------------------------------------------
+// TRAZABILIDAD HACCP: Auditoría inmutable de registros de calidad
+//
+// Append-only: ningún registro de esta tabla se modifica ni elimina jamás.
+// Registra quién hizo qué, cuándo, con el valor anterior y el nuevo.
+// Requerido por normativas de inocuidad alimentaria (HACCP, BPM, ISO 22000).
+// -----------------------------------------------------------------------------
+
+enum AccionAuditoria {
+  crear
+  modificar
+  eliminar  // soft-delete
+  restaurar
+}
+
+model AuditoriaRegistro {
+  id               String           @id @default(uuid()) @db.Uuid
+  registroCalidadId String          @db.Uuid @map("registro_calidad_id")
+  accion           AccionAuditoria
+  usuarioId        String           @db.Uuid @map("usuario_id")
+  timestamp        DateTime         @default(now())
+  datosAntes       Json?            @map("datos_antes") // snapshot del registro antes del cambio
+  datosDespues     Json?            @map("datos_despues")
+  ipOrigen         String?          @map("ip_origen")
+  motivo           String?          // obligatorio para eliminar/restaurar
+
+  registroCalidad RegistroCalidad @relation(fields: [registroCalidadId], references: [id])
+  usuario         Usuario         @relation(fields: [usuarioId], references: [id])
+
+  @@index([registroCalidadId])
+  @@index([usuarioId, timestamp])
+  @@map("auditoria_registros")
+}
+
+// -----------------------------------------------------------------------------
+// TRAZABILIDAD HACCP: Historial de cambios de estado de lotes
+//
+// Cada transición de estado de un lote queda registrada permanentemente.
+// Permite reconstruir el ciclo de vida completo ante un reclamo o auditoría.
+// -----------------------------------------------------------------------------
+
+model LoteEstadoLog {
+  id              String     @id @default(uuid()) @db.Uuid
+  loteId          String     @db.Uuid @map("lote_id")
+  estadoAnterior  EstadoLote @map("estado_anterior")
+  estadoNuevo     EstadoLote @map("estado_nuevo")
+  usuarioId       String     @db.Uuid @map("usuario_id")
+  motivo          String?
+  timestamp       DateTime   @default(now())
+
+  lote    Lote    @relation(fields: [loteId], references: [id])
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  @@index([loteId, timestamp])
+  @@map("lote_estado_log")
+}

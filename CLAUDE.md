@@ -1,5 +1,18 @@
 # CLAUDE.md — Proyecto de Digitalización La Cumbre
 
+
+## Al iniciar sesión
+
+Antes de asumir en qué está el proyecto:
+1. Correr `git log --oneline -15` — no asumir estado sin chequear el
+   historial real de commits.
+2. Leer `PROGRESO-digitalizacion.md` — enfoque actual, próximo paso,
+   bloqueadores.
+3. Leer `ESTADO-AGENTES.md` — si hay una cadena de aprobación abierta,
+   un veto sin resolver, o una decisión estructural pendiente de tu
+   confirmación, NO continuar con nueva lógica de negocio o cambios
+   estructurales hasta resolver eso primero
+
 ## Exploración del codebase: usar Graphify primero
 
 Este repo tiene un grafo de conocimiento local en `graphify-out/` (gitignoreado,

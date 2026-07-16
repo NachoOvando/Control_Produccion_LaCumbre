@@ -1,0 +1,38 @@
+@import "tailwindcss";
+
+:root {
+  --color-primario: #E1000F;
+  --color-primario-hover: #c0000d;
+  --color-dorado: #D29600;
+  --color-dorado-hover: #b07d00;
+  --color-fondo: #f5f5f5;
+  --color-fondo-modulo: #d9d9d9;
+  --color-texto: #1a1a1a;
+  --color-texto-muted: #6b7280;
+}
+
+body {
+  background-color: var(--color-fondo);
+  color: var(--color-texto);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Botones chip semánticos para selección de defectos */
+.chip-sin-defecto {
+  @apply bg-green-100 text-green-800 border-2 border-green-300;
+}
+.chip-sin-defecto.chip-activo {
+  @apply bg-green-500 text-white border-green-600 shadow-md;
+}
+.chip-defecto-leve {
+  @apply bg-amber-100 text-amber-800 border-2 border-amber-300;
+}
+.chip-defecto-leve.chip-activo {
+  @apply bg-amber-500 text-white border-amber-600 shadow-md;
+}
+.chip-defecto-grave {
+  @apply bg-red-100 text-red-800 border-2 border-red-300;
+}
+.chip-defecto-grave.chip-activo {
+  @apply bg-red-600 text-white border-red-700 shadow-md;
+}
