@@ -8,6 +8,7 @@ import {
   registrarFalloLogin,
   limpiarFallosDeEmail,
 } from "./auth/rate-limit-login";
+import { validarTokenSesion } from "./auth/session-validation";
 
 // Guard de boot: DEMO_MODE en producción sería una segunda contraseña admin
 // activa (el login demo resuelve al usuario real, ver ADR-007). Falla el
@@ -54,6 +55,25 @@ function registrarFalloConLog(email: string, ip: string) {
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
+  callbacks: {
+    ...authConfig.callbacks,
+    // Override SOLO en la instancia Node: revalida el token contra la DB
+    // (usuario existe y activo) como máximo 1 vez/min. El middleware Edge usa
+    // authConfig directamente y conserva su jwt sin Prisma — no fusionar.
+    // Incidente que cierra: JWT emitidos antes del fix del login demo
+    // (2026-07-15) llevaban un id inexistente en `usuarios` y rompían toda
+    // escritura con P2003 durante hasta 30 días (vida del token).
+    async jwt({ token, user }) {
+      if (user) {
+        token.id = user.id!;
+        token.rol = user.rol;
+        // authorize() acaba de validar contra la DB — no repetir el lookup ya
+        token.validadoEn = Date.now();
+        return token;
+      }
+      return validarTokenSesion(token, Date.now());
+    },
+  },
   providers: [
     Credentials({
       credentials: {
@@ -85,39 +105,33 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           credentials.email === process.env.DEMO_USER_EMAIL &&
           credentials.password === process.env.DEMO_USER_PASSWORD
         ) {
-          // Con DB disponible, resolver el usuario REAL por email (solo el email
-          // fijo de DEMO_USER_EMAIL — la contraseña demo no sirve para impersonar
-          // a otros usuarios). El UUID fantasma de abajo no existe en `usuarios`:
-          // una sesión con ese id rompe con P2003 toda escritura con FK a usuarios
-          // (activadoPorId, creadoPorId, responsableId).
+          // Resolver el usuario REAL por email (solo el email fijo de
+          // DEMO_USER_EMAIL — la contraseña demo no sirve para impersonar a
+          // otros usuarios). Sin fallback si la DB no responde: el viejo
+          // "usuario fantasma" (id inexistente en `usuarios`) generó dos
+          // incidentes de escrituras rotas con P2003 (2026-07-15 y 2026-07-16,
+          // este último vía un JWT viejo) — con DB real desde el 2026-07-13,
+          // un modo demo sin DB no tiene razón de existir. No reintroducir.
           console.warn("[AUTH] Sesión iniciada por MODO DEMO — apagar DEMO_MODE cuando el login real esté operativo");
           try {
             const usuarioReal = await prisma.usuario.findUnique({
               where: { email: process.env.DEMO_USER_EMAIL },
               select: { id: true, email: true, nombre: true, rol: true, activo: true },
             });
-            // DB respondió: el usuario real manda, incluso si eso significa
-            // rechazar el login (inactivo o no existe) — el fantasma NO es un
-            // segundo plan para sortear una desactivación real.
-            if (usuarioReal) {
-              if (!usuarioReal.activo) return null;
-              return {
-                id: usuarioReal.id,
-                email: usuarioReal.email,
-                name: usuarioReal.nombre,
-                rol: usuarioReal.rol,
-              };
-            }
-          } catch {
-            // DB inalcanzable — único caso donde cae al fantasma (modo demo sin DB, solo lectura)
+            // El usuario real manda, incluso si eso significa rechazar el
+            // login (inactivo o no existe) — el modo demo no es una vía para
+            // sortear una desactivación real.
+            if (!usuarioReal || !usuarioReal.activo) return null;
             return {
-              id: "00000000-0000-0000-0000-000000000001",
-              email: process.env.DEMO_USER_EMAIL,
-              name: "Usuario Demo",
-              rol: "admin",
+              id: usuarioReal.id,
+              email: usuarioReal.email,
+              name: usuarioReal.nombre,
+              rol: usuarioReal.rol,
             };
+          } catch {
+            // DB inalcanzable: login rechazado (sin DB no hay app que usar)
+            return null;
           }
-          return null;
         }
 
         try {

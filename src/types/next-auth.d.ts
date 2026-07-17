@@ -18,5 +18,8 @@ declare module "next-auth/jwt" {
   interface JWT {
     id: string
     rol: string
+    // Último instante (epoch ms) en que el token se revalidó contra la DB —
+    // ver src/lib/auth/session-validation.ts
+    validadoEn?: number
   }
 }
