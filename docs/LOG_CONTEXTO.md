@@ -6,6 +6,25 @@
 
 ---
 
+### [2026-07-16] - Producción Diaria: cajas por estándar del maestro + persistencia de línea en la sesión
+
+- **Contexto:** dos pedidos del usuario tras probar en tablet: (1) "Cajas producidas" debe tomar por defecto el estándar `cajasPorPallet` del producto, con carga manual solo si el pallet quedó incompleto; (2) volver "atrás" desde un punto de control no debe resetear al paso de selección de línea.
+- **Regla de negocio (dictamen `scm-alimentos`: "válida con ajustes"; decisiones cerradas con el usuario):**
+  - Con estándar definido, el campo cajas nace precargado y **bloqueado** — la única vía de edición es marcar "¿El pallet quedó incompleto?" (limpia y abre el numpad); desmarcar restaura el estándar. Sin estándar (null en maestro): carga manual libre como antes.
+  - El usuario **mantuvo el boolean** `pallet_incompleto` (rechazó el motivo de lista corta sugerido por scm) — payload sin cambios, el JSON Schema AJV ya lo soportaba, cero migración.
+  - **Pallet abierto entre turnos**: cada turno registra lo suyo (el saliente marca incompleto con las cajas que lleva; el entrante arranca pallet nuevo). Es instrucción operativa, no código.
+  - **Confirmación del último pallet** al guardar si quedó con el estándar sin tocar (`window.confirm`) — scm: el último pallet del turno es estadísticamente el parcial y el riesgo real es guardarlo sin mirar (balance del lote no cierra ante Arcor).
+  - **Sin cota superior de cajas a propósito**: scm pidió permitir cantidades MAYORES al estándar (fin de lote suma cajas sueltas al último pallet). Solo se valida cajas > 0.
+- **Persistencia de línea:** `sessionStorage` (`calidad:lineaActiva`, decisión del usuario: dura lo que la pestaña — coherente con "producto activo de hoy"). Hidratación en efecto de montaje (no en el init de `useState`: el componente se server-renderiza y leer storage ahí rompería la hydration). Prioridad `?linea=` > storage > paso "linea". Se guarda al resolver con éxito el fetch de producto-activo; se limpia con "Cambiar de Línea"/"Volver a elegir línea". Además, los 3 redirects post-guardado que perdían la línea ahora llevan `?linea=` (`useBatchGuardar` de ProduccionDiaria y los 2 handlers de PesoMedicionesForm — uno iba a `/calidad` a secas).
+- **Propagación del dato:** `ProductoActivoLinea.cajasPorPallet` (tipo + mapper inline de `[puntoControlId]/page.tsx` + `toProductoActivoLinea` del route + demo). La query de Prisma ya lo traía (include completo de producto).
+- **Revisión `frontend-ux` (aprobado con observaciones), correcciones aplicadas:** validación cajas > 0; `aria-disabled` en el campo bloqueado; y el hallazgo real de que el numpad (panel fijo bottom ~320px) tapaba el toggle en pantallas bajas — fix: spacer condicional (`h-[340px]` con numpad abierto) + `scrollIntoView(block:"start")` de la card al marcar incompleto, **diferido con setTimeout** para que React ya haya agrandado el spacer (verificado en browser: toggle en y=151 con panel en y=318).
+- **Observación escalada al usuario (frontend-ux, no resuelta):** si el operario guarda de a un pallet por vez, la confirmación del último pallet salta en CADA guardado — fatiga que erosiona la protección. Decidir si se acota el disparador o se acepta el costo.
+- `seguridad-analista` no se invocó (proporcionalidad: sin cambios de auth/authz/schema; sessionStorage guarda solo un UUID de línea no sensible; el manejo de 401 ya venía revisado del fix anterior).
+- **Verificado en browser** contra dev server real: precarga 357 + "Estándar del producto"; campo no abre numpad; marcar → limpia y abre numpad (con auto-scroll); cargar 300; desmarcar → restaura 357; entrar a puntos-control sin `?linea=` restaura directo la grilla de la línea; atrás del browser desde un form vuelve a la grilla; "Cambiar de Línea" limpia el storage. La confirmación del último pallet se verificó por código (dispararla en browser habría escrito un pallet falso en la DB real).
+- **Incidente de entorno (lección):** correr el preview server del agente en paralelo al dev server del usuario sobre el mismo repo corrompe `.next/` (ambos escriben la misma caché de webpack) — ChunkLoadError e hydration errors en los dos. Se resolvió matando ambos y regenerando `.next`. **No levantar un segundo `next dev` sobre el mismo working dir**; usar el server que ya está corriendo o reemplazarlo.
+
+---
+
 ### [2026-07-16] - Cierre de deuda de auditoría: rate limiting de login (#10, #11) + retención de backups (#12 parcial)
 
 - **Contexto:** 3 hallazgos de `seguridad-analista` de la auditoría de julio, marcados "importantes, no urgentes", cerrados a pedido del usuario.

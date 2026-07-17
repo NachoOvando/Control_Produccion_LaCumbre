@@ -23,10 +23,12 @@ type Entrada = {
   observaciones: string;
 };
 
-function crearEntrada(): Entrada {
+// cajasIniciales: el estándar del maestro (cajasPorPallet) cuando existe — el
+// pallet nace con la cantidad estándar y solo se edita marcándolo incompleto.
+function crearEntrada(cajasIniciales: string): Entrada {
   return {
     id: Math.random().toString(36).slice(2),
-    cajas: "",
+    cajas: cajasIniciales,
     peso_alfajor: "",
     pallet_incompleto: false,
     lote_pt: "",
@@ -48,11 +50,15 @@ const CAMPOS_NUMERICOS: { key: CampoNumerico; label: string; unidad?: string }[]
 export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, productoActivo }: Props) {
   const { data: session } = useSession();
   const [refreshKey, setRefreshKey] = useState(0);
-  const { enviando, error, exito, guardar } = useBatchGuardar("/calidad/puntos-control", () => setRefreshKey((k) => k + 1));
+  const { enviando, error, exito, guardar } = useBatchGuardar(`/calidad/puntos-control?linea=${lineaProductivaId}`, () => setRefreshKey((k) => k + 1));
   const { registros: registrosHoy, cargando: cargandoHoy, esDemo } = useRegistrosDelDia(puntoControlId, lineaProductivaId, refreshKey);
 
   const loteId = productoActivo.loteId;
-  const [entradas, setEntradas] = useState<Entrada[]>([crearEntrada()]);
+  // Estándar de cajas por pallet del maestro: con estándar, el campo queda
+  // bloqueado en ese valor y solo se edita marcando el pallet como incompleto
+  // (regla auditada por scm-alimentos — divergencia = declaración explícita).
+  const cajasEstandar = productoActivo.cajasPorPallet != null ? String(productoActivo.cajasPorPallet) : null;
+  const [entradas, setEntradas] = useState<Entrada[]>([crearEntrada(cajasEstandar ?? "")]);
   const [campoActivo, setCampoActivo] = useState<CampoActivo>(null);
   const [validar, setValidar] = useState(false);
   const [hora, setHora] = useState(horaPlanta());
@@ -105,7 +111,7 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
   }, []);
 
   const agregarEntrada = () => {
-    setEntradas((prev) => [...prev, crearEntrada()]);
+    setEntradas((prev) => [...prev, crearEntrada(cajasEstandar ?? "")]);
     setCampoActivo(null);
   };
 
@@ -148,6 +154,7 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
 
   const camposIncompletos = (e: Entrada, idx: number) => {
     if (!e.cajas) return "Ingresá la cantidad de cajas";
+    if (parseInt(e.cajas) <= 0) return "La cantidad de cajas debe ser mayor a 0";
     if (!e.peso_alfajor) return "Ingresá el peso del alfajor";
     if (!lotePtDe(e, idx).trim()) return "Ingresá el código de lote PT";
     return null;
@@ -158,6 +165,17 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
     if (!vencimientoFinal.trim()) return;
     for (let i = 0; i < entradas.length; i++) {
       if (camposIncompletos(entradas[i], i)) return;
+    }
+
+    // El último pallet del turno es estadísticamente el parcial (scm-alimentos):
+    // si quedó con el estándar sin tocar, pedir confirmación explícita antes de
+    // guardarlo — evita declarar cajas que no existen en el balance del lote.
+    const ultima = entradas[entradas.length - 1];
+    if (cajasEstandar !== null && !ultima.pallet_incompleto) {
+      const ok = window.confirm(
+        `¿Confirmás ${ultima.cajas} cajas (estándar completo) en el pallet N° ${numeroPallet(entradas.length - 1)}?\n\nSi quedó incompleto, cancelá y marcalo para cargar la cantidad real.`
+      );
+      if (!ok) return;
     }
 
     const hoy = hoyPlanta();
@@ -291,22 +309,51 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
               <div className="grid grid-cols-2 gap-2">
                 {CAMPOS_NUMERICOS.map(({ key, label, unidad }) => {
                   const activo = campoActivo && "entradaId" in campoActivo && campoActivo.entradaId === entrada.id && campoActivo.campo === key;
+                  // Con estándar del maestro y pallet completo, las cajas quedan
+                  // bloqueadas en el estándar — se editan marcando el pallet incompleto.
+                  const bloqueado = key === "cajas" && cajasEstandar !== null && !entrada.pallet_incompleto;
                   return (
-                    <button key={key} type="button"
-                      onClick={() => setCampoActivo({ entradaId: entrada.id, campo: key })}
-                      className={`rounded-xl border-2 p-2 text-left transition-all active:scale-95 ${activo ? "border-[#E1000F] bg-red-50" : entrada[key] ? "border-green-300 bg-green-50" : "border-gray-200 bg-gray-50"}`}>
+                    <button key={key} type="button" aria-disabled={bloqueado}
+                      onClick={() => { if (!bloqueado) setCampoActivo({ entradaId: entrada.id, campo: key }); }}
+                      className={`rounded-xl border-2 p-2 text-left transition-all ${bloqueado ? "border-green-200 bg-green-50/60 cursor-default" : `active:scale-95 ${activo ? "border-[#E1000F] bg-red-50" : entrada[key] ? "border-green-300 bg-green-50" : "border-gray-200 bg-gray-50"}`}`}>
                       <p className="text-xs text-gray-400 truncate">{label}</p>
                       <p className={`text-xl font-bold font-mono mt-0.5 ${entrada[key] ? "text-gray-900" : "text-gray-300"}`}>
                         {entrada[key] || "—"}{entrada[key] && unidad ? <span className="text-xs font-normal text-gray-400 ml-0.5">{unidad}</span> : null}
                       </p>
+                      {bloqueado && <p className="text-[11px] text-green-600 mt-0.5">Estándar del producto</p>}
                     </button>
                   );
                 })}
               </div>
 
-              {/* Pallet incompleto */}
+              {/* Pallet incompleto — con estándar, es la única vía para editar cajas */}
               <button type="button"
-                onClick={() => updateEntrada(entrada.id, { pallet_incompleto: !entrada.pallet_incompleto })}
+                onClick={(ev) => {
+                  const marcar = !entrada.pallet_incompleto;
+                  if (cajasEstandar !== null) {
+                    if (marcar) {
+                      // Limpia el estándar y abre el numpad para cargar la cantidad real
+                      updateEntrada(entrada.id, { pallet_incompleto: true, cajas: "" });
+                      setCampoActivo({ entradaId: entrada.id, campo: "cajas" });
+                      // El numpad (panel fijo bottom, ~320px) tapa esta card en
+                      // pantallas bajas. Alinear la card arriba del viewport deja
+                      // campos y toggle en la zona visible sobre el panel. Diferido
+                      // para que React ya haya agrandado el spacer del fondo (si no,
+                      // el scroll se recorta). scrollIntoView (y no window.scrollBy)
+                      // porque el scroll puede vivir en un contenedor interno.
+                      const card = ev.currentTarget.closest("div.bg-white");
+                      setTimeout(() => card?.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+                    } else {
+                      // Desmarcar restaura el estándar
+                      updateEntrada(entrada.id, { pallet_incompleto: false, cajas: cajasEstandar });
+                      if (campoActivo && "entradaId" in campoActivo && campoActivo.entradaId === entrada.id && campoActivo.campo === "cajas") {
+                        setCampoActivo(null);
+                      }
+                    }
+                  } else {
+                    updateEntrada(entrada.id, { pallet_incompleto: marcar });
+                  }
+                }}
                 className={`w-full py-2.5 rounded-xl text-sm font-semibold border-2 transition-all active:scale-95 ${entrada.pallet_incompleto ? "bg-amber-100 border-amber-300 text-amber-800" : "bg-gray-50 border-gray-200 text-gray-500"}`}>
                 {entrada.pallet_incompleto ? "✓ Marcado como incompleto — se registra la cantidad de cajas que lleva" : "¿El pallet quedó incompleto?"}
               </button>
@@ -373,7 +420,9 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
         />
       </div>
 
-      <div className="h-20" />
+      {/* Con el numpad abierto, dejar aire para poder scrollear cualquier card
+          del form por encima del panel fijo (~320px) */}
+      <div className={campoActivo ? "h-[340px]" : "h-20"} />
 
       {campoActivo && (
         <div onClick={(e) => e.stopPropagation()}>

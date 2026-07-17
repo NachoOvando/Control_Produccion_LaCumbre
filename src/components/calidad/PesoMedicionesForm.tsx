@@ -315,7 +315,7 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
       const json = await res.json();
       if (!res.ok) { setError(json.error ?? "Error al guardar los registros."); return; }
       setExito(true);
-      setTimeout(() => router.push("/calidad"), 2000);
+      setTimeout(() => router.push(`/calidad/puntos-control?linea=${lineaProductivaId}`), 2000);
     } catch {
       setError("Error de conexión. Verificá la red e intentá nuevamente.");
     } finally {
@@ -879,7 +879,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
       const json = await res.json();
       if (!res.ok) { setError(json.error ?? "Error al guardar."); return; }
       setExito(true);
-      setTimeout(() => router.push("/calidad/puntos-control"), 2000);
+      setTimeout(() => router.push(`/calidad/puntos-control?linea=${lineaProductivaId}`), 2000);
     } catch {
       setError("Error de conexión. Verificá la red e intentá nuevamente.");
     } finally {

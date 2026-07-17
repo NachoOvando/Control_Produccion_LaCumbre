@@ -65,6 +65,7 @@ export type ProductoActivoLinea = {
   // (ej. ProduccionDiariaForm: vencimiento PT, nomenclatura de lote PT).
   vidaUtilMeses: number | null;
   nomenclaturaLote: string | null;
+  cajasPorPallet: number | null;
   activadoPorNombre: string;
   activadoEn: string; // ISO
 };

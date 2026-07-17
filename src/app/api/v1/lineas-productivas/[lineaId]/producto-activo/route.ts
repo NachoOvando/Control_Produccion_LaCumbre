@@ -42,6 +42,7 @@ function toProductoActivoLinea(estado: NonNullable<Awaited<ReturnType<typeof get
     familiaSlug: estado.loteActivo.producto.familia.slug,
     vidaUtilMeses: estado.loteActivo.producto.vidaUtilMeses,
     nomenclaturaLote: estado.loteActivo.producto.nomenclaturaLote,
+    cajasPorPallet: estado.loteActivo.producto.cajasPorPallet,
     activadoPorNombre: estado.activadoPor.nombre,
     activadoEn: estado.activadoEn.toISOString(),
   };

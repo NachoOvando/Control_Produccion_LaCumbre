@@ -49,6 +49,12 @@ type Props = {
 // re-preguntar (fricción innecesaria en medio de una jornada de captura).
 type Paso = "cargando" | "linea" | "producto" | "grilla";
 
+// La línea activa persiste por pestaña (sessionStorage): el botón "atrás" del
+// browser y los re-montajes de la page no deben resetear al operario al paso de
+// selección de línea en medio de una jornada. Se limpia solo con un cambio
+// explícito ("Cambiar de Línea" / "Volver a elegir línea") o al cerrar la pestaña.
+const LINEA_STORAGE_KEY = "calidad:lineaActiva";
+
 export function CalidadModuloView({ lineas, productos, lineaInicialId }: Props) {
   const lineaInicialValida = lineaInicialId && lineas.some((l) => l.id === lineaInicialId);
 
@@ -73,6 +79,23 @@ export function CalidadModuloView({ lineas, productos, lineaInicialId }: Props) 
   const [activando, setActivando] = useState(false);
   const [errorActivacion, setErrorActivacion] = useState<string | null>(null);
 
+  // Restauración por sessionStorage cuando la URL no trae ?linea= (típico: botón
+  // "atrás" del browser, que vuelve a /calidad/puntos-control pelado). Corre en
+  // un efecto de montaje — no en el init de useState — porque el componente se
+  // server-renderiza y sessionStorage solo existe en el cliente (evita hydration
+  // mismatch). La prioridad la tiene ?linea= (prop), que ya viene resuelta.
+  useEffect(() => {
+    if (lineaInicialValida) return;
+    const guardada = sessionStorage.getItem(LINEA_STORAGE_KEY);
+    if (guardada && lineas.some((l) => l.id === guardada)) {
+      esRestauracion.current = true;
+      setPaso("cargando");
+      setLineaActivaId(guardada);
+    }
+    // Solo al montar: después de eso la línea la maneja el usuario.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Resolver el producto activo de la línea confirmada. El flujo normal SIEMPRE
   // pasa por el paso de producto (con el activo preseleccionado si existe); solo
   // la restauración por query param va directo a la grilla. El guard `cancelado`
@@ -85,9 +108,22 @@ export function CalidadModuloView({ lineas, productos, lineaInicialId }: Props) 
     setCargandoActivo(true);
     setErrorCargaActivo(null);
     fetch(`/api/v1/lineas-productivas/${lineaActivaId}/producto-activo`)
-      .then((r) => r.json())
+      .then((r) => {
+        // Sesión inválida (ej. JWT viejo que la revalidación contra DB mató):
+        // re-loguear, no mostrar un error críptico ni seguir operando.
+        if (r.status === 401) {
+          window.location.assign("/login");
+          return null;
+        }
+        // Un error del server NO se interpreta como "sin producto activo"
+        // (json.data undefined pisaría el lote de la línea) — va al catch.
+        if (!r.ok) throw new Error(`producto-activo respondió ${r.status}`);
+        return r.json();
+      })
       .then((json) => {
-        if (cancelado) return;
+        if (cancelado || json === null) return;
+        // Línea resuelta con éxito → recordarla para esta pestaña (ver LINEA_STORAGE_KEY)
+        sessionStorage.setItem(LINEA_STORAGE_KEY, lineaActivaId);
         const activo: ProductoActivoLinea | null = json.data ?? null;
         setProductoActivo(activo);
         if (esRestauracion.current && activo) {
@@ -161,6 +197,11 @@ export function CalidadModuloView({ lineas, productos, lineaInicialId }: Props) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ productoId: productoSeleccionado }),
       });
+      // Sesión inválida → re-loguear (mismo criterio que el GET de arriba)
+      if (res.status === 401) {
+        window.location.assign("/login");
+        return;
+      }
       const json = await res.json();
       if (!res.ok) {
         setErrorActivacion(json.error ?? "Error al activar el producto.");
@@ -358,7 +399,7 @@ export function CalidadModuloView({ lineas, productos, lineaInicialId }: Props) 
             ) : (
               <button
                 type="button"
-                onClick={() => { setPaso("linea"); setProductoSeleccionado(""); setErrorActivacion(null); }}
+                onClick={() => { sessionStorage.removeItem(LINEA_STORAGE_KEY); setPaso("linea"); setProductoSeleccionado(""); setErrorActivacion(null); }}
                 className="w-full py-3 rounded-2xl text-sm font-semibold text-gray-600 hover:bg-gray-100 transition-all"
               >
                 Volver a elegir línea
@@ -389,7 +430,7 @@ export function CalidadModuloView({ lineas, productos, lineaInicialId }: Props) 
           <div className="flex items-center gap-3 flex-shrink-0">
             <button
               type="button"
-              onClick={() => { setPaso("linea"); setLineaSeleccionada(""); }}
+              onClick={() => { sessionStorage.removeItem(LINEA_STORAGE_KEY); setPaso("linea"); setLineaSeleccionada(""); }}
               className="px-4 py-2.5 rounded-xl text-sm font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 transition-all"
             >
               Cambiar de Línea

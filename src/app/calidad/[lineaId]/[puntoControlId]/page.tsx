@@ -77,6 +77,7 @@ const DEMO_PRODUCTO_ACTIVO: ProductoActivoLinea = {
   familiaSlug: "alfajor",
   vidaUtilMeses: 9,
   nomenclaturaLote: "L{yyyyMMdd}-{correlativo}",
+  cajasPorPallet: 48,
   activadoPorNombre: "Demo",
   activadoEn: new Date(0).toISOString(),
 };
@@ -113,6 +114,7 @@ export default async function RegistroPuntoControlPage({
           familiaSlug: estado.loteActivo.producto.familia.slug,
           vidaUtilMeses: estado.loteActivo.producto.vidaUtilMeses,
           nomenclaturaLote: estado.loteActivo.producto.nomenclaturaLote,
+          cajasPorPallet: estado.loteActivo.producto.cajasPorPallet,
           activadoPorNombre: estado.activadoPor.nombre,
           activadoEn: estado.activadoEn.toISOString(),
         };
