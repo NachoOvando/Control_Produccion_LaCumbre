@@ -6,6 +6,16 @@
 
 ---
 
+### [2026-07-20] - Fix: Lote PT de Producción Diaria pasa a carga 100% manual
+
+- **Contexto:** el usuario reportó que el "Lote PT sugerido por nomenclatura" en Producción Diaria (`L20260720-01`) estaba mal (correlativo/fecha no correspondían al código real), y aclaró que además no quiere ninguna sugerencia ahí: el código lo pone el codificador de planta en el pallet físico, no algo que el sistema deba inventar.
+- **Fix:** `ProduccionDiariaForm.tsx` — se eliminó la derivación por `Producto.nomenclaturaLote` (`lotePtDe`, `lote_pt_editado`); el campo "Lote PT" ahora nace vacío y es 100% manual, sin label "(sugerido por nomenclatura)". Se eliminó `generarLotePT()` de `lote-pt.ts` (quedó sin otros consumidores en el repo) y sus tests; `calcularVencimiento`/`calcularFechaVencimiento` (mismo archivo) no se tocaron.
+- **Decisión de alcance (confirmada con el usuario):** `Producto.nomenclaturaLote` **se mantiene** en el schema y en el maestro importado — dato dormido, sin consumidor hoy, no se justificaba una migración solo para borrarlo. Si en el futuro se decide recuperar la idea (ej. con datos reales de un codificador integrado), el campo ya está poblado.
+- Cambio contenido a un formulario + una función pura sin consumidores — sin cadena de subagentes (criterio de cambio acotado, mismo patrón que otros fixes UI de esta magnitud).
+- **Verificado en browser:** el campo Lote PT entra vacío (sin value, solo placeholder de ejemplo), sin la etiqueta verde; typecheck y suite de tests verdes.
+
+---
+
 ### [2026-07-20] - Formato definitivo de `Lote.numeroLote` (flujo automático) + "jornada productiva" 6am-6am
 
 - **Contexto:** cierre de la deuda #9 de `docs/auditoria-2026-07.md` ("reglas reales de numeración de lote, hoy placeholder `GEN-{fecha}-{hora}`, las define el usuario" — pendiente desde ADR-011).

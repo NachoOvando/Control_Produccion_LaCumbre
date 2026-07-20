@@ -182,7 +182,7 @@ En todos los casos, sin `DEMO_MODE=true` el error propaga y lo captura el error 
 El sistema tiene **dos conceptos de "número de lote" con propósitos distintos**, que conviven en el modelo de datos y no hay que confundir ni reutilizar el formato de uno para el otro:
 
 - **`Lote.numeroLote`** (esta feature): identifica la **corrida de producción en curso**. **Actualización 2026-07-20 (ver ADR-013): ya tiene un formato definitivo** (`L-DD/MM/AAAA-AJJJ-hh:mm-ENV`) para el flujo automático de "producto activo por línea" (ADR-012). El formato descrito originalmente acá, `GEN-{yyyyMMdd}-{HHmmss}` (generado por `generarNumeroLoteGenerico()` en `src/db/calidad.repository.ts`), **sigue siendo el que se usa**, pero ya no es un placeholder a resolver — quedó acotado, por decisión explícita del usuario, al alta MANUAL de lote (`/calidad/lotes/nuevo`), que hoy no asocia línea productiva. Ver ADR-013 para el detalle completo.
-- **`Producto.nomenclaturaLote`** (preexistente, no tocado por esta feature): template del lote de **Producto Terminado** en el pallet dentro de "Producción Diaria" (ver `lote-pt.ts` y la tabla `Producto` en la sección de modelo de datos). Ejemplos de template: `L{yyyyMMdd}-{correlativo}` (Arcor), `LC{ddMMyy}-{correlativo}` (marca propia).
+- **`Producto.nomenclaturaLote`** — **dado de baja de la UI el 2026-07-20** (decisión del usuario): el campo "Lote PT" en "Producción Diaria" pasó a ser carga 100% manual, sin sugerencia. El código real del pallet lo pone el codificador de planta (equipo físico de la línea), no se calcula por sistema — la sugerencia por template estaba mal (correlativo/fecha no correspondían al código real) y además era conceptualmente incorrecta: el sistema no debería inventar un código que otro proceso ya define. Se eliminó `generarLotePT()` (`lote-pt.ts`, sin otros consumidores) y sus tests. **El campo `Producto.nomenclaturaLote` se mantiene en el schema y en el maestro importado** (decisión explícita: no ameritaba una migración solo para esto) pero queda sin ningún consumidor en `src/` — dato dormido, no es deuda a resolver, es una decisión consciente si algún día se decide recuperarlo con datos reales de un futuro codificador integrado.
 
 ### Autorización
 
@@ -471,7 +471,7 @@ Tabla puente `puntoControlId` + `familiaId` (PK compuesta). Declara qué familia
 | `esSemielaborado` | `Boolean` default `false` | Detectado en el import por texto "semi-elaborado" en la columna OBS del maestro. |
 | `observaciones` | `String?` | |
 | `descripcionVieja` | `String?` | Descripción legacy del maestro origen, solo referencia. |
-| `nomenclaturaLote` | `String?` | Template de lote PT, ej. `L{yyyyMMdd}-{correlativo}` (Arcor), `LC{ddMMyy}-{correlativo}` (marca propia). **No confundir con `Lote.numeroLote` — ver ADR-011 y ADR-013.** También viaja en `ProductoActivoLinea` (ver ADR-012). |
+| `nomenclaturaLote` | `String?` | **Sin uso desde 2026-07-20** (ver ADR-011, "Dos números de lote distintos") — el campo "Lote PT" de Producción Diaria pasó a carga 100% manual. Dato dormido en el schema/maestro, no consumido en `src/`. |
 | `activo` | `Boolean` default `true` | |
 | `updatedAt` | `DateTime` | Nuevo — antes `Producto` no trackeaba actualizaciones. |
 

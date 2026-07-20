@@ -6,7 +6,7 @@ import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
 import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
-import { generarLotePT, calcularVencimiento } from "@/lib/calidad/lote-pt";
+import { calcularVencimiento } from "@/lib/calidad/lote-pt";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
@@ -19,7 +19,6 @@ type Entrada = {
   peso_alfajor: string;
   pallet_incompleto: boolean;
   lote_pt: string;
-  lote_pt_editado: boolean; // si el operario tocó el lote a mano, no lo pisamos
   observaciones: string;
 };
 
@@ -32,7 +31,6 @@ function crearEntrada(cajasIniciales: string): Entrada {
     peso_alfajor: "",
     pallet_incompleto: false,
     lote_pt: "",
-    lote_pt_editado: false,
     observaciones: "",
   };
 }
@@ -90,17 +88,6 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
 
   const numeroPallet = useCallback((idx: number) => maxPalletHoy + idx + 1, [maxPalletHoy]);
 
-  // Lote PT resuelto en render: sugerido por nomenclatura salvo que el operario lo haya editado.
-  // Derivarlo (y no sincronizarlo con un efecto) garantiza que cada pallet nuevo ya nace pre-llenado.
-  const lotePtDe = useCallback(
-    (entrada: Entrada, idx: number): string => {
-      if (entrada.lote_pt_editado) return entrada.lote_pt;
-      const template = productoActivo.nomenclaturaLote;
-      return template ? generarLotePT(template, new Date(), numeroPallet(idx)) : entrada.lote_pt;
-    },
-    [productoActivo.nomenclaturaLote, numeroPallet]
-  );
-
   const vencimientoCalculado = productoActivo.vidaUtilMeses
     ? calcularVencimiento(new Date(), productoActivo.vidaUtilMeses)
     : null;
@@ -152,19 +139,19 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
 
   const vencimientoFinal = vencimientoCalculado ?? vencimientoManual;
 
-  const camposIncompletos = (e: Entrada, idx: number) => {
+  const camposIncompletos = (e: Entrada) => {
     if (!e.cajas) return "Ingresá la cantidad de cajas";
     if (parseInt(e.cajas) <= 0) return "La cantidad de cajas debe ser mayor a 0";
     if (!e.peso_alfajor) return "Ingresá el peso del alfajor";
-    if (!lotePtDe(e, idx).trim()) return "Ingresá el código de lote PT";
+    if (!e.lote_pt.trim()) return "Ingresá el código de lote PT";
     return null;
   };
 
   const onGuardar = async () => {
     setValidar(true);
     if (!vencimientoFinal.trim()) return;
-    for (let i = 0; i < entradas.length; i++) {
-      if (camposIncompletos(entradas[i], i)) return;
+    for (const entrada of entradas) {
+      if (camposIncompletos(entrada)) return;
     }
 
     // El último pallet del turno es estadísticamente el parcial (scm-alimentos):
@@ -186,7 +173,7 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
         cajas: parseInt(e.cajas),
         pallet_numero: numeroPallet(idx),
         peso_alfajor: parseFloat(e.peso_alfajor),
-        lote_pt: lotePtDe(e, idx).trim(),
+        lote_pt: e.lote_pt.trim(),
         vencimiento_pt: vencimientoFinal.trim(),
       };
       if (e.pallet_incompleto) data.pallet_incompleto = true;
@@ -289,7 +276,7 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
 
       {/* Entradas = pallets */}
       {entradas.map((entrada, idx) => {
-        const errEntrada = validar ? camposIncompletos(entrada, idx) : null;
+        const errEntrada = validar ? camposIncompletos(entrada) : null;
         return (
           <div key={entrada.id} className={`bg-white rounded-2xl border-2 overflow-hidden transition-all ${errEntrada ? "border-red-200" : "border-gray-100"}`} onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-100">
@@ -358,13 +345,12 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
                 {entrada.pallet_incompleto ? "✓ Marcado como incompleto — se registra la cantidad de cajas que lleva" : "¿El pallet quedó incompleto?"}
               </button>
 
-              {/* Lote PT */}
+              {/* Lote PT: carga 100% manual — el código lo pone el codificador de
+                  planta en el pallet físico, no lo calcula el sistema. */}
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">
-                  Lote PT {productoActivo.nomenclaturaLote && !entrada.lote_pt_editado && <span className="text-green-600 font-normal">(sugerido por nomenclatura)</span>}
-                </label>
-                <input type="text" value={lotePtDe(entrada, idx)} placeholder="Ej: L20260707-01"
-                  onChange={(e) => updateEntrada(entrada.id, { lote_pt: e.target.value, lote_pt_editado: true })}
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Lote PT</label>
+                <input type="text" value={entrada.lote_pt} placeholder="Ej: L20260707-01"
+                  onChange={(e) => updateEntrada(entrada.id, { lote_pt: e.target.value })}
                   className="w-full py-2 px-3 rounded-xl border-2 border-gray-200 bg-gray-50 text-sm font-mono text-gray-900 focus:border-[#E1000F] focus:outline-none" />
               </div>
 

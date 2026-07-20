@@ -1,22 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generarLotePT, calcularVencimiento, calcularFechaVencimiento } from "./lote-pt";
-
-describe("generarLotePT", () => {
-  const fecha = new Date(2026, 6, 15); // 15 de julio 2026, mes 0-indexed
-
-  it("reemplaza {yyyyMMdd} y {correlativo} (template Arcor)", () => {
-    expect(generarLotePT("L{yyyyMMdd}-{correlativo}", fecha, 3)).toBe("L20260715-03");
-  });
-
-  it("reemplaza {ddMMyy} (template marca propia)", () => {
-    expect(generarLotePT("LC{ddMMyy}-{correlativo}", fecha, 12)).toBe("LC150726-12");
-  });
-
-  it("padea el correlativo a 2 dígitos pero no trunca 3 dígitos", () => {
-    expect(generarLotePT("L{yyyyMMdd}-{correlativo}", fecha, 7)).toBe("L20260715-07");
-    expect(generarLotePT("L{yyyyMMdd}-{correlativo}", fecha, 123)).toBe("L20260715-123");
-  });
-});
+import { calcularVencimiento, calcularFechaVencimiento } from "./lote-pt";
 
 describe("calcularVencimiento", () => {
   it("suma meses de vida útil en formato MM/yyyy", () => {

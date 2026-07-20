@@ -1,18 +1,5 @@
-// Generación de lote PT y vencimiento a partir de la configuración del producto.
+// Generación de vencimiento a partir de la configuración del producto.
 // Lógica pura, sin dependencias de framework — testeable de forma aislada.
-
-// Tokens soportados en la nomenclatura de lote: {yyyyMMdd}, {ddMMyy}, {correlativo}
-export function generarLotePT(template: string, fecha: Date, correlativo: number): string {
-  const dd = String(fecha.getDate()).padStart(2, "0");
-  const mm = String(fecha.getMonth() + 1).padStart(2, "0");
-  const yyyy = String(fecha.getFullYear());
-  const yy = yyyy.slice(2);
-
-  return template
-    .replaceAll("{yyyyMMdd}", `${yyyy}${mm}${dd}`)
-    .replaceAll("{ddMMyy}", `${dd}${mm}${yy}`)
-    .replaceAll("{correlativo}", String(correlativo).padStart(2, "0"));
-}
 
 // Vencimiento = fecha de producción + vida útil en meses, preservando el día
 // del mes de producción (ej. producido el 16 → vence el 16 del mes destino).

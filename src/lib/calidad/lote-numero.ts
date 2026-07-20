@@ -3,8 +3,9 @@
 // dependencias de framework ni de Prisma; el caller (calidad.repository.ts)
 // resuelve todos los inputs antes de llamar.
 //
-// NO confundir con generarLotePT (lote-pt.ts) — ese es el lote de Producto
-// Terminado que va físicamente en el pallet, concepto distinto.
+// NO confundir con el "Lote PT" de Producción Diaria — ese es un código que
+// carga el codificador de planta en el pallet físico (input manual del
+// operario, sin generación por sistema), concepto distinto.
 //
 // Formato: L-DD/MM/AAAA-AJJJ-hh:mm-ENV
 //   DD/MM/AAAA = fecha de VENCIMIENTO del producto (fechaProduccion + vidaUtilMeses)
