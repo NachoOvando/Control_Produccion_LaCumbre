@@ -8,7 +8,7 @@ import { ProduccionDiariaForm } from "@/components/calidad/ProduccionDiariaForm"
 import { TrazabilidadInsumosForm } from "@/components/calidad/TrazabilidadInsumosForm";
 import { RegistroGenericoForm } from "@/components/calidad/RegistroGenericoForm";
 import { getRelacionPuntoLinea, getProductoActivoDeLinea } from "@/db/calidad.repository";
-import { hoyPlanta } from "@/lib/calidad/fecha-planta";
+import { jornadaProductiva } from "@/lib/calidad/fecha-planta";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 const TIPOS_PESO = new Set<string>(["peso_alfajor", "peso_relleno", "peso_bano"]);
@@ -104,7 +104,10 @@ export default async function RegistroPuntoControlPage({
         lineaProductiva: rel.lineaProductiva,
       };
 
-      const estado = await getProductoActivoDeLinea(lineaId, hoyPlanta());
+      // jornadaProductiva() (no hoyPlanta()): mismo criterio que el GET de
+      // producto-activo — evita que esta página diga "sin producto activo"
+      // en la franja 00:00-05:59 cuando en realidad sí lo hay (ADR-013).
+      const estado = await getProductoActivoDeLinea(lineaId, jornadaProductiva());
       if (estado) {
         productoActivo = {
           loteId: estado.loteActivo.id,

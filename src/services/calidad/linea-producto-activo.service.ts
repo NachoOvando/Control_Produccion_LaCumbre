@@ -10,7 +10,7 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { activarProductoLinea } from "@/db/calidad.repository";
-import { hoyPlanta } from "@/lib/calidad/fecha-planta";
+import { jornadaProductiva } from "@/lib/calidad/fecha-planta";
 
 const ActivarProductoInputSchema = z.object({
   productoId: z.string().uuid("productoId debe ser UUID"),
@@ -83,7 +83,7 @@ export async function activarProductoLineaService(
 
   const linea = await prisma.lineaProductiva.findUnique({
     where: { id: lineaProductivaId },
-    select: { id: true },
+    select: { id: true, codigo: true },
   });
   if (!linea) return { ok: false, error: "Línea productiva no encontrada", code: "LINEA_NO_ENCONTRADA" };
 
@@ -93,7 +93,7 @@ export async function activarProductoLineaService(
   const { productoId } = parsed.data;
   const producto = await prisma.producto.findUnique({
     where: { id: productoId },
-    select: { id: true, activo: true, nombre: true, lineaProductivaId: true },
+    select: { id: true, activo: true, nombre: true, lineaProductivaId: true, vidaUtilMeses: true },
   });
   if (!producto) return { ok: false, error: "Producto no encontrado", code: "PRODUCTO_NO_ENCONTRADO" };
   if (!producto.activo) return { ok: false, error: `El producto '${producto.nombre}' está inactivo`, code: "PRODUCTO_INACTIVO" };
@@ -107,9 +107,29 @@ export async function activarProductoLineaService(
       code: "PRODUCTO_LINEA_INCORRECTA",
     };
   }
+  // El numeroLote definitivo (2026-07-16) necesita la vida útil del producto
+  // para el segmento de vencimiento — decisión explícita del usuario: bloquear
+  // en vez de generar un placeholder, para forzar a completar el maestro.
+  // Se valida > 0 (no solo no-null) para no delegar en el throw defensivo de
+  // calcularFechaVencimiento — un dato mal cargado en el maestro (0 o negativo)
+  // debe dar el mismo 409 claro, no un 500 genérico (hallazgo seguridad-analista).
+  if (producto.vidaUtilMeses == null || producto.vidaUtilMeses <= 0) {
+    return {
+      ok: false,
+      error: `El producto '${producto.nombre}' no tiene vida útil cargada en el maestro — completá ese dato antes de activarlo`,
+      code: "PRODUCTO_SIN_VIDA_UTIL",
+    };
+  }
 
   try {
-    const estado = await activarProductoLinea(lineaProductivaId, productoId, usuarioId, new Date(hoyPlanta()));
+    const estado = await activarProductoLinea({
+      lineaProductivaId,
+      productoId,
+      usuarioId,
+      fechaProduccion: new Date(jornadaProductiva()),
+      vidaUtilMeses: producto.vidaUtilMeses,
+      lineaCodigo: linea.codigo,
+    });
     return { ok: true, data: estado };
   } catch (err) {
     console.error("[linea-producto-activo.service] Error al activar producto:", err);

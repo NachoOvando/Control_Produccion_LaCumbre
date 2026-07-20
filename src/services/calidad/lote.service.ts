@@ -41,7 +41,9 @@ export async function crearLoteService(rawInput: unknown, creadoPorId?: string):
   if (!producto.activo) return { ok: false, error: `El producto '${producto.nombre}' está inactivo`, code: "PRODUCTO_INACTIVO" };
 
   try {
-    const lote = await crearLote(productoId, new Date(fechaProduccion), notas, creadoPorId);
+    // Sin lineaCodigo (alta manual no asocia línea, ver ADR-011) → crearLote
+    // usa el placeholder legacy GEN-{fecha}-{hora}, no el formato definitivo.
+    const lote = await crearLote({ productoId, fechaProduccion: new Date(fechaProduccion), notas, creadoPorId });
     return { ok: true, data: lote };
   } catch (err) {
     console.error("[lote.service] Error al crear lote:", err);

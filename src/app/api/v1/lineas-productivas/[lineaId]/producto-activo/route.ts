@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { activarProductoLineaService } from "@/services/calidad/linea-producto-activo.service";
 import { getProductoActivoDeLinea } from "@/db/calidad.repository";
-import { hoyPlanta } from "@/lib/calidad/fecha-planta";
+import { jornadaProductiva } from "@/lib/calidad/fecha-planta";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 export const dynamic = "force-dynamic";
@@ -24,6 +24,7 @@ const STATUS_POR_CODE: Record<string, number> = {
   PRODUCTO_NO_ENCONTRADO: 404,
   PRODUCTO_INACTIVO: 409,
   PRODUCTO_LINEA_INCORRECTA: 409,
+  PRODUCTO_SIN_VIDA_UTIL: 409,
   ACTIVACION_MUY_FRECUENTE: 429,
   LIMITE_ACTIVACIONES_EXCEDIDO: 429,
   ERROR_INTERNO: 500,
@@ -55,7 +56,11 @@ export async function GET(_req: NextRequest, { params }: Params) {
   }
 
   const { lineaId } = await params;
-  const estado = await getProductoActivoDeLinea(lineaId, hoyPlanta());
+  // jornadaProductiva() (no hoyPlanta()): la escritura (POST, más abajo el
+  // service) usa la misma ventana 6am-6am para decidir si hay que crear un
+  // lote nuevo — si la lectura usara el día calendario, en la franja
+  // 00:00-05:59 le diría al operario "sin producto activo" aunque sí lo hay.
+  const estado = await getProductoActivoDeLinea(lineaId, jornadaProductiva());
   return NextResponse.json({ data: estado ? toProductoActivoLinea(estado) : null });
 }
 

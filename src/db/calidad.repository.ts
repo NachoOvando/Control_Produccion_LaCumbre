@@ -6,6 +6,8 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import type { RegistroCalidadInput } from "@/types/calidad";
+import { horaPlanta } from "@/lib/calidad/fecha-planta";
+import { generarNumeroLote } from "@/lib/calidad/lote-numero";
 
 export async function getLineasConPuntosControl(modulo = "calidad") {
   return prisma.lineaProductiva.findMany({
@@ -52,14 +54,19 @@ export async function getProductosActivos() {
 // secuencias como la prevista para pallet_numero/nroMuestra (ver ADR-006). Basta
 // con generar + intentar insertar, reintentando ante colisión de `numeroLote`.
 //
-// PLACEHOLDER: el formato `GEN-{yyyyMMdd}-{HHmmss}` es temporal. Las reglas
-// reales de numeración de lote (por producto / línea de negocio) las define el
-// usuario más adelante — no usar este formato como referencia para
-// integraciones ni reportes a Arcor. No confundir con `Producto.nomenclaturaLote`
-// (usado en `lote-pt.ts` para el lote de PT del pallet en Producción Diaria):
-// son dos números con propósitos distintos — este identifica la corrida de
-// producción en curso, aquel el lote de producto terminado en el pallet.
-function generarNumeroLoteGenerico(fechaProduccion: Date): string {
+// Formato definitivo (2026-07-16, ver generarNumeroLote en lote-numero.ts):
+// `L-DD/MM/AAAA-AJJJ-hh:mm-ENV`, requiere vidaUtilMeses del producto y código
+// de línea — se usa siempre que crearLote() reciba `lineaCodigo`. El alta
+// MANUAL de lote (`/calidad/lotes/nuevo`) hoy no asocia línea productiva (ver
+// `CrearLoteInputSchema` en lote.service.ts) — decisión explícita del usuario:
+// ese camino no ocurre en la práctica desde que existe "producto activo por
+// línea" (ADR-012), así que sigue con el placeholder `GEN-{fecha}-{hora}` hasta
+// que se defina una línea para ese flujo. No confundir con
+// `Producto.nomenclaturaLote` (usado en `lote-pt.ts` para el lote de PT del
+// pallet en Producción Diaria): son dos números con propósitos distintos.
+// `fechaProduccion` debe llegar ya reconstruida a getters locales (ver
+// `fechaCalendario` en crearLote) — este helper no reparsea ninguna zona horaria.
+function generarNumeroLoteGenerico(fechaProduccion: Date, sufijo?: string): string {
   const yyyy = fechaProduccion.getFullYear();
   const mm = String(fechaProduccion.getMonth() + 1).padStart(2, "0");
   const dd = String(fechaProduccion.getDate()).padStart(2, "0");
@@ -67,7 +74,8 @@ function generarNumeroLoteGenerico(fechaProduccion: Date): string {
   const hh = String(ahora.getHours()).padStart(2, "0");
   const min = String(ahora.getMinutes()).padStart(2, "0");
   const ss = String(ahora.getSeconds()).padStart(2, "0");
-  return `GEN-${yyyy}${mm}${dd}-${hh}${min}${ss}`;
+  const base = `GEN-${yyyy}${mm}${dd}-${hh}${min}${ss}`;
+  return sufijo ? `${base}${sufijo}` : base;
 }
 
 // `meta.target` viene tipado `unknown` por Prisma; con el driver adapter de pg
@@ -103,15 +111,53 @@ function esColisionLoteLinea(e: unknown): boolean {
   );
 }
 
-export async function crearLote(
-  productoId: string,
-  fechaProduccion: Date,
-  notas?: string,
-  creadoPorId?: string,
-  lineaProductivaId?: string
-) {
+export async function crearLote(params: {
+  productoId: string;
+  fechaProduccion: Date;
+  // Presentes solo en el flujo automático (activarProductoLinea) — habilitan
+  // el formato definitivo. Ausentes → placeholder legacy (ver comentario arriba).
+  vidaUtilMeses?: number | null;
+  lineaCodigo?: number | null;
+  notas?: string;
+  creadoPorId?: string;
+  lineaProductivaId?: string;
+}) {
+  const { productoId, fechaProduccion, vidaUtilMeses, lineaCodigo, notas, creadoPorId, lineaProductivaId } = params;
+
+  // fechaProduccion llega parseada como UTC (viene de un string "yyyy-MM-dd" vía
+  // jornadaProductiva()/hoyPlanta() en los callers — ver esos comentarios), pero
+  // AMBOS generadores de numeroLote (nuevo y legacy) leen el día con getters
+  // LOCALES. Mezclar ambos corre el día calendario según el desfasaje horario de
+  // la máquina — se reconstruye una sola vez, para los dos caminos, con getters
+  // UTC hacia un Date de constructor local con el mismo año/mes/día.
+  const fechaCalendario = new Date(
+    fechaProduccion.getUTCFullYear(),
+    fechaProduccion.getUTCMonth(),
+    fechaProduccion.getUTCDate()
+  );
+
   for (let intento = 0; intento < 3; intento++) {
-    const numeroLote = generarNumeroLoteGenerico(fechaProduccion);
+    // Ambos formatos son determinísticos dentro de su granularidad (minuto el
+    // nuevo, segundo el legacy) — en reintento por colisión real se agrega un
+    // sufijo de desambiguación en vez de confiar en que cambie solo.
+    const sufijo = intento > 0 ? `-${String(intento + 1).padStart(2, "0")}` : undefined;
+    let numeroLote: string;
+    if (lineaCodigo != null) {
+      // Bloqueado ya en la capa de service si falta vidaUtilMeses — este throw
+      // es defensivo (bug de programación, no un caso de negocio esperado).
+      if (vidaUtilMeses == null) {
+        throw new Error("crearLote: lineaCodigo presente sin vidaUtilMeses — debía bloquearse en el service");
+      }
+      numeroLote = generarNumeroLote({
+        fechaProduccion: fechaCalendario,
+        vidaUtilMeses,
+        lineaCodigo,
+        horaRegistro: horaPlanta(),
+        sufijo,
+      });
+    } else {
+      numeroLote = generarNumeroLoteGenerico(fechaCalendario, sufijo);
+    }
     try {
       return await prisma.lote.create({
         data: { numeroLote, productoId, fechaProduccion, notas, creadoPorId, lineaProductivaId },
@@ -151,12 +197,20 @@ export async function getProductoActivoDeLinea(lineaProductivaId: string, fecha:
 // uno nuevo — la @@unique([productoId, lineaProductivaId, fechaProduccion]) en
 // Lote es la que hace posible este find-or-create. Registra la activación en
 // LineaActivacionLog (append-only) además de mover el puntero mutable.
-export async function activarProductoLinea(
-  lineaProductivaId: string,
-  productoId: string,
-  usuarioId: string,
-  fechaProduccion: Date
-) {
+export async function activarProductoLinea(params: {
+  lineaProductivaId: string;
+  productoId: string;
+  usuarioId: string;
+  fechaProduccion: Date;
+  // Resueltos por el service (ya validados: vidaUtilMeses no-null es
+  // obligatorio ahí antes de llegar acá) — habilitan el numeroLote definitivo.
+  // Objeto param a propósito: dos number|null consecutivos como posicionales
+  // son fáciles de invertir sin que TypeScript lo detecte.
+  vidaUtilMeses: number | null;
+  lineaCodigo: number | null;
+}) {
+  const { lineaProductivaId, productoId, usuarioId, fechaProduccion, vidaUtilMeses, lineaCodigo } = params;
+
   const buscarExistente = () =>
     prisma.lote.findUnique({
       where: {
@@ -169,7 +223,14 @@ export async function activarProductoLinea(
 
   if (!lote) {
     try {
-      lote = await crearLote(productoId, fechaProduccion, undefined, usuarioId, lineaProductivaId);
+      lote = await crearLote({
+        productoId,
+        fechaProduccion,
+        vidaUtilMeses,
+        lineaCodigo,
+        creadoPorId: usuarioId,
+        lineaProductivaId,
+      });
     } catch (e) {
       // Dos activaciones concurrentes del mismo producto/línea/día: perdimos la
       // carrera contra otro request que ya insertó el lote entre el findUnique

@@ -54,12 +54,12 @@ describe("crearLoteService", () => {
 
     const res = await crearLoteService(INPUT_VALIDO, "user-1");
     expect(res.ok).toBe(true);
-    expect(crearLoteMock).toHaveBeenCalledWith(
-      INPUT_VALIDO.productoId,
-      new Date("2026-07-15"),
-      undefined,
-      "user-1"
-    );
+    expect(crearLoteMock).toHaveBeenCalledWith({
+      productoId: INPUT_VALIDO.productoId,
+      fechaProduccion: new Date("2026-07-15"),
+      notas: undefined,
+      creadoPorId: "user-1",
+    });
   });
 
   it("un throw del repository se traduce a ERROR_INTERNO, no explota", async () => {

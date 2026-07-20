@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { hoyPlanta, horaPlanta } from "./fecha-planta";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { hoyPlanta, horaPlanta, jornadaProductiva, TZ_PLANTA } from "./fecha-planta";
 
 describe("fecha-planta", () => {
   it("hoyPlanta devuelve formato YYYY-MM-DD", () => {
@@ -23,5 +23,46 @@ describe("fecha-planta", () => {
     const fechaPlanta = hoyPlanta();
     const utcHoy = new Date().toISOString().slice(0, 10);
     expect(fechaPlanta <= utcHoy).toBe(true);
+  });
+});
+
+describe("jornadaProductiva", () => {
+  // Argentina es UTC-3 sin horario de verano — fijamos con vi.setSystemTime
+  // en UTC y verificamos el resultado en hora de planta.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("antes de las 6am de planta, pertenece a la jornada del día calendario ANTERIOR", () => {
+    vi.useFakeTimers();
+    // 2026-07-16 05:30 hora de planta = 08:30 UTC
+    vi.setSystemTime(new Date("2026-07-16T08:30:00Z"));
+    expect(jornadaProductiva()).toBe("2026-07-15");
+  });
+
+  it("a las 6am en punto de planta, ya pertenece a la jornada de HOY", () => {
+    vi.useFakeTimers();
+    // 2026-07-16 06:00 hora de planta = 09:00 UTC
+    vi.setSystemTime(new Date("2026-07-16T09:00:00Z"));
+    expect(jornadaProductiva()).toBe("2026-07-16");
+  });
+
+  it("durante el día, coincide con hoyPlanta", () => {
+    vi.useFakeTimers();
+    // 2026-07-16 14:00 hora de planta = 17:00 UTC
+    vi.setSystemTime(new Date("2026-07-16T17:00:00Z"));
+    expect(jornadaProductiva()).toBe(hoyPlanta());
+    expect(jornadaProductiva()).toBe("2026-07-16");
+  });
+
+  it("cruza correctamente el borde de mes (madrugada del día 1)", () => {
+    vi.useFakeTimers();
+    // 2026-08-01 02:00 hora de planta = 05:00 UTC → jornada del 31/07
+    vi.setSystemTime(new Date("2026-08-01T05:00:00Z"));
+    expect(jornadaProductiva()).toBe("2026-07-31");
+  });
+
+  it("usa la misma zona horaria que hoyPlanta/horaPlanta", () => {
+    expect(TZ_PLANTA).toBe("America/Argentina/Cordoba");
   });
 });

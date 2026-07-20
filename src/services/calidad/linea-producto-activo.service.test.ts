@@ -25,13 +25,14 @@ const PRODUCTO_ID = "11111111-1111-4111-8111-111111111111";
 const USUARIO_ID = "33333333-3333-4333-8333-333333333333";
 
 function setupCaminoFeliz() {
-  lineaMock.mockResolvedValue({ id: LINEA_ID } as never);
+  lineaMock.mockResolvedValue({ id: LINEA_ID, codigo: 3 } as never);
   logMock.mockResolvedValue([] as never);
   productoMock.mockResolvedValue({
     id: PRODUCTO_ID,
     activo: true,
     nombre: "ALFAJOR NEGRO",
     lineaProductivaId: LINEA_ID,
+    vidaUtilMeses: 9,
   } as never);
   activarMock.mockResolvedValue({ loteActivoId: "lote-1" } as never);
 }
@@ -76,10 +77,43 @@ describe("activarProductoLineaService — validaciones", () => {
       activo: true,
       nombre: "SNACK",
       lineaProductivaId: null,
+      vidaUtilMeses: 6,
     } as never);
 
     const res = await activarProductoLineaService(LINEA_ID, { productoId: PRODUCTO_ID }, USUARIO_ID);
     expect(res.ok).toBe(true);
+  });
+
+  it("rechaza producto SIN vida útil cargada con PRODUCTO_SIN_VIDA_UTIL (409)", async () => {
+    setupCaminoFeliz();
+    productoMock.mockResolvedValue({
+      id: PRODUCTO_ID,
+      activo: true,
+      nombre: "TAPAS",
+      lineaProductivaId: LINEA_ID,
+      vidaUtilMeses: null,
+    } as never);
+
+    const res = await activarProductoLineaService(LINEA_ID, { productoId: PRODUCTO_ID }, USUARIO_ID);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("PRODUCTO_SIN_VIDA_UTIL");
+    expect(activarMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza vida útil con dato inválido (0 o negativo) con el mismo PRODUCTO_SIN_VIDA_UTIL", async () => {
+    setupCaminoFeliz();
+    productoMock.mockResolvedValue({
+      id: PRODUCTO_ID,
+      activo: true,
+      nombre: "MAL CARGADO",
+      lineaProductivaId: LINEA_ID,
+      vidaUtilMeses: 0,
+    } as never);
+
+    const res = await activarProductoLineaService(LINEA_ID, { productoId: PRODUCTO_ID }, USUARIO_ID);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("PRODUCTO_SIN_VIDA_UTIL");
+    expect(activarMock).not.toHaveBeenCalled();
   });
 });
 

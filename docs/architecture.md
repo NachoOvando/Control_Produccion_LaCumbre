@@ -82,7 +82,7 @@ La Cumbre es una empresa de manufactura alimenticia (copacker Arcor + marca prop
 
 **Disparador para implementarlo:** segunda tablet por línea, ingesta desde balanzas/sensores, o cualquier otro escritor concurrente.
 
-**Nota:** el número de lote (`Lote.numeroLote`, ver ADR-011) es un correlativo distinto, con su propio mecanismo (generación + reintento ante colisión, no secuencia atómica) — no confundir ambos diseños.
+**Nota:** el número de lote (`Lote.numeroLote`, ver ADR-011 y ADR-013) es un correlativo distinto, con su propio mecanismo (generación + reintento ante colisión, no secuencia atómica) — no confundir ambos diseños.
 
 ---
 
@@ -164,7 +164,7 @@ Aprobado por `seguridad-analista` con observaciones (sin veto): el gate `NODE_EN
 
 El sistema tiene **dos conceptos de "número de lote" con propósitos distintos**, que conviven en el modelo de datos y no hay que confundir ni reutilizar el formato de uno para el otro:
 
-- **`Lote.numeroLote`** (esta feature): identifica la **corrida de producción en curso**. Formato actual generado por `generarNumeroLoteGenerico()` (`src/db/calidad.repository.ts`): `GEN-{yyyyMMdd}-{HHmmss}` (fecha de producción + hora de creación del registro). Es un **placeholder explícitamente temporal** — las reglas reales de numeración (por producto, por línea de negocio) las va a definir el usuario más adelante. **No usar este formato como referencia para integraciones ni reportes a Arcor.**
+- **`Lote.numeroLote`** (esta feature): identifica la **corrida de producción en curso**. **Actualización 2026-07-20 (ver ADR-013): ya tiene un formato definitivo** (`L-DD/MM/AAAA-AJJJ-hh:mm-ENV`) para el flujo automático de "producto activo por línea" (ADR-012). El formato descrito originalmente acá, `GEN-{yyyyMMdd}-{HHmmss}` (generado por `generarNumeroLoteGenerico()` en `src/db/calidad.repository.ts`), **sigue siendo el que se usa**, pero ya no es un placeholder a resolver — quedó acotado, por decisión explícita del usuario, al alta MANUAL de lote (`/calidad/lotes/nuevo`), que hoy no asocia línea productiva. Ver ADR-013 para el detalle completo.
 - **`Producto.nomenclaturaLote`** (preexistente, no tocado por esta feature): template del lote de **Producto Terminado** en el pallet dentro de "Producción Diaria" (ver `lote-pt.ts` y la tabla `Producto` en la sección de modelo de datos). Ejemplos de template: `L{yyyyMMdd}-{correlativo}` (Arcor), `LC{ddMMyy}-{correlativo}` (marca propia).
 
 ### Autorización
@@ -178,9 +178,9 @@ Restringido a roles con responsabilidad de supervisión — dar de alta un lote 
 
 ### Concurrencia y generación de `numeroLote`
 
-`crearLote()` genera el número, intenta el `insert`, y ante colisión (`P2002` sobre la columna `numero_lote`) reintenta hasta 3 veces con un nuevo timestamp. Se aceptó este mecanismo (en vez de la secuencia atómica de ADR-006) porque el alta de lote es una acción manual de baja frecuencia — un supervisor dando de alta unas pocas veces por día, no un escritor de alta concurrencia.
+`crearLote()` genera el número, intenta el `insert`, y ante colisión (`P2002` sobre la columna `numero_lote`) reintenta hasta 3 veces agregando un sufijo de desambiguación. Se aceptó este mecanismo (en vez de la secuencia atómica de ADR-006) porque tanto el alta manual como la activación de producto por línea son acciones de baja frecuencia relativa — no un escritor de alta concurrencia.
 
-**Reutilizado en ADR-012:** `crearLote()` es la misma función que usa el find-or-create de "producto activo por línea" — no se duplicó el mecanismo de generación/reintento.
+**Reutilizado en ADR-012 y ADR-013:** `crearLote()` es la misma función que usa el find-or-create de "producto activo por línea", tanto para el formato legacy como para el formato definitivo — no se duplicó el mecanismo de generación/reintento.
 
 ### Auditoría de autoría — `Lote.creadoPorId`
 
@@ -190,7 +190,7 @@ Restringido a roles con responsabilidad de supervisión — dar de alta un lote 
 
 ### Deuda técnica conocida de esta feature (aceptada, no bloqueante)
 
-- **Colisión de timestamp bajo alta concurrencia** en `GEN-{yyyyMMdd}-{HHmmss}` — ver "Concurrencia" arriba.
+- **Colisión de timestamp bajo alta concurrencia** en `GEN-{yyyyMMdd}-{HHmmss}` — ver "Concurrencia" arriba. Sigue vigente porque el formato legacy sigue en uso para el alta manual (ver ADR-013).
 - **Sin rate limiting** en `POST /api/v1/calidad/lotes` (señalado por `seguridad-analista`, severidad Media) — es la misma deuda transversal ya señalada para `authorize()` de NextAuth (ver sección "Deuda técnica y decisiones pendientes"), no algo específico de esta feature.
 - **Cero tests automatizados** — mismo criterio que el resto del repo: no hay infraestructura de testing configurada todavía (ver esa misma sección).
 - **Fallback demo sin gatear por `DEMO_MODE`** en `src/app/calidad/lotes/nuevo/page.tsx` — ver ADR-007.
@@ -209,7 +209,7 @@ Restringido a roles con responsabilidad de supervisión — dar de alta un lote 
 
 ### Modelo de datos — tres piezas nuevas
 
-1. **`Lote.lineaProductivaId`** (`String? @db.Uuid`, FK opcional a `LineaProductiva`) + **`@@unique([productoId, lineaProductivaId, fechaProduccion])`** en `prisma/schema.prisma`. Habilita un **find-or-create**: activar el mismo producto en la misma línea el mismo día reutiliza el lote existente en vez de crear uno nuevo (`activarProductoLinea` en `src/db/calidad.repository.ts` hace `findUnique` por ese unique compuesto antes de `crearLote`). Verificado manualmente en browser contra Supabase real: activar Alfajor → lote A; activar Tapas → lote B; reactivar Alfajor → mismo lote A (no un lote C). `lineaProductivaId` es nullable porque coexiste con lotes históricos sin línea (altas previas a esta feature) y con futuros lotes generados desde `OrdenProduccion`.
+1. **`Lote.lineaProductivaId`** (`String? @db.Uuid`, FK opcional a `LineaProductiva`) + **`@@unique([productoId, lineaProductivaId, fechaProduccion])`** en `prisma/schema.prisma`. Habilita un **find-or-create**: activar el mismo producto en la misma línea el mismo día reutiliza el lote existente en vez de crear uno nuevo (`activarProductoLinea` en `src/db/calidad.repository.ts` hace `findUnique` por ese unique compuesto antes de `crearLote`). Verificado manualmente en browser contra Supabase real: activar Alfajor → lote A; activar Tapas → lote B; reactivar Alfajor → mismo lote A (no un lote C). `lineaProductivaId` es nullable porque coexiste con lotes históricos sin línea (altas previas a esta feature) y con futuros lotes generados desde `OrdenProduccion`. **Actualización ADR-013:** el "día" de este find-or-create ya no es el día calendario — ver "jornada productiva" en ADR-013.
 2. **`LineaProduccionEstado`** (`linea_produccion_estado`, tabla nueva, puntero mutable): PK `lineaProductivaId`, `loteActivoId` (`String @unique @db.Uuid`, FK a `Lote`), `activadoPorId` (FK a `Usuario`), `activadoEn` (`DateTime`). Es la fuente de verdad que leen los 8 formularios vía `getProductoActivoDeLinea(lineaProductivaId, fecha)`. Si la `fechaProduccion` del lote apuntado no coincide con la fecha consultada (hoy en planta), se trata como "sin producto activo" — **no arrastra el producto de ayer** a la mañana siguiente.
 3. **`LineaActivacionLog`** (`linea_activacion_log`, tabla nueva, **append-only**): `id`, `lineaProductivaId`, `loteId`, `usuarioId`, `createdAt` (con índice `[lineaProductivaId, createdAt]`). Historial inmutable de cada activación — mismo patrón que `LoteEstadoLog`/`AuditoriaRegistro` ya existentes en el repo. **Nunca se hace `update`/`delete` sobre esta tabla** (confirmado por `seguridad-analista` con búsqueda en todo el repo). Sirve doble propósito: trazabilidad de "quién activó qué, cuándo" y fuente de datos del guard anti-abuso (ver más abajo).
 
@@ -256,7 +256,7 @@ type ProductoActivoLinea = {
 };
 ```
 
-`vidaUtilMeses` y `nomenclaturaLote` son datos de **maestro del producto** (no de la activación en sí), incluidos a propósito: sin ellos, `ProduccionDiariaForm` perdía la auto-sugerencia de vencimiento de PT y de nomenclatura de lote que ya tenía antes de esta feature. Durante el desarrollo se sacaron por error del tipo en un momento y se detectó la regresión (el formulario dejaba de auto-completar esos campos); se volvieron a agregar. Si en el futuro alguien "limpia" este tipo para dejarlo mínimo, tiene que confirmar que esos dos formularios consumidores siguen recibiendo el dato desde otro lado antes de sacarlos.
+`vidaUtilMeses` y `nomenclaturaLote` son datos de **maestro del producto** (no de la activación en sí), incluidos a propósito: sin ellos, `ProduccionDiariaForm` perdía la auto-sugerencia de vencimiento de PT y de nomenclatura de lote que ya tenía antes de esta feature. Durante el desarrollo se sacaron por error del tipo en un momento y se detectó la regresión (el formulario dejaba de auto-completar esos campos); se volvieron a agregar. Si en el futuro alguien "limpia" este tipo para dejarlo mínimo, tiene que confirmar que esos dos formularios consumidores siguen recibiendo el dato desde otro lado antes de sacarlos. **Desde ADR-013, `vidaUtilMeses` además es obligatorio para poder activar el producto — ver esa sección.**
 
 `familiaSlug` se agregó en una iteración posterior (pedido explícito del usuario: "la familia está incluida en el producto seleccionado") para que el filtrado de la grilla de puntos de control se derive del producto activo en vez de un filtro manual — ver más abajo. Poblado desde `producto.familia.slug` en el `include` de `getProductoActivoDeLinea`/`activarProductoLinea` (`src/db/calidad.repository.ts`) y en los dos mappers que aplanan el estado de Prisma (`route.ts` del endpoint y el mapper inline de `[lineaId]/[puntoControlId]/page.tsx`).
 
@@ -264,9 +264,9 @@ type ProductoActivoLinea = {
 
 - **`src/components/calidad/CalidadModuloView.tsx` — asistente de 4 pasos** (rediseño según vistas modelo del usuario; máquina de estados `paso: "cargando" | "linea" | "producto" | "grilla"`). Solo cambió la presentación respecto al diseño original de este ADR (que usaba tabs de líneas siempre visibles + selector de producto inline sobre la grilla) — el modelo de datos, los endpoints, la autorización y el guard anti-abuso son exactamente los mismos:
   1. **Paso "linea"** — pantalla dedicada "Línea Productiva": card centrada con un `<select>` de líneas y botón "Avanzar". Ya no existen las tabs de líneas. Si el fetch de producto activo de esa línea falla (red inestable en planta), **no se asume silenciosamente "sin producto activo"** — eso arriesgaba que el operario active por error un producto que pisara el que ya estaba activo para toda la línea. En su lugar se muestra un mensaje de error inline con botón "Reintentar" en este mismo paso. Si el operario reconfirma la **misma** línea ya resuelta (por ejemplo, volviendo desde "Cambiar de Línea"), se refetchea igual — no se confía en el estado en memoria del cliente, porque otro operario pudo haber hecho un changeover en esa línea compartida mientras tanto.
-  2. **Paso "producto"** — pantalla dedicada "Seleccionar Producto a Fabricar": `<select>` agrupado por familia (`<optgroup>` por `Familia.nombre`) y campo informativo "Número de Lote: Se asigna automáticamente" (el número real lo genera el server al avanzar — placeholder `GEN-...`, ver ADR-011). **Este paso SIEMPRE se muestra al confirmar una línea desde el flujo de entrada — nunca se saltea, ni siquiera si la línea ya tiene producto activo hoy** (pedido explícito del usuario, revirtiendo el diseño original de este ADR que sí saltaba el paso). Si hay producto activo, viene **preseleccionado** en el `<select>` para que "Avanzar" sea una confirmación explícita, no una elección a ciegas.
+  2. **Paso "producto"** — pantalla dedicada "Seleccionar Producto a Fabricar": `<select>` agrupado por familia (`<optgroup>` por `Familia.nombre`) y campo informativo "Número de Lote: Se asigna automáticamente" (el número real lo genera el server al avanzar, con el formato definitivo `L-DD/MM/AAAA-AJJJ-hh:mm-ENV` desde ADR-013 — antes era el placeholder `GEN-...`). **Este paso SIEMPRE se muestra al confirmar una línea desde el flujo de entrada — nunca se saltea, ni siquiera si la línea ya tiene producto activo hoy** (pedido explícito del usuario, revirtiendo el diseño original de este ADR que sí saltaba el paso). Si hay producto activo, viene **preseleccionado** en el `<select>` para que "Avanzar" sea una confirmación explícita, no una elección a ciegas.
      - Si el producto seleccionado **coincide** con el activo, el botón dice **"Confirmar y avanzar"** y NO se hace `POST` (no hay cambio de estado que registrar — evita ensuciar `LineaActivacionLog` con re-confirmaciones y evita chocar con el cooldown del guard).
-     - Si el producto seleccionado **difiere**, el botón dice **"Cambiar producto"**, el card "Producto actual" pasa a estilo de advertencia (ámbar) con el texto "Vas a reemplazarlo y generar un lote nuevo para el producto elegido", y sí se hace el `POST .../producto-activo` (con los mismos errores existentes, incluidos los `429` del guard). Esto se agregó tras un hallazgo de `frontend-ux`: antes, confirmar el producto ya activo y cambiarlo a otro se veían visualmente idénticos (mismo botón "Avanzar"), con riesgo de que un mis-tap en el `<select>` disparara un changeover real sin que el operario lo notara.
+     - Si el producto seleccionado **difiere**, el botón dice **"Cambiar producto"**, el card "Producto actual" pasa a estilo de advertencia (ámbar) con el texto "Vas a reemplazarlo y generar un lote nuevo para el producto elegido", y sí se hace el `POST .../producto-activo` (con los mismos errores existentes, incluidos los `429` del guard y, desde ADR-013, el `409 PRODUCTO_SIN_VIDA_UTIL`). Esto se agregó tras un hallazgo de `frontend-ux`: antes, confirmar el producto ya activo y cambiarlo a otro se veían visualmente idénticos (mismo botón "Avanzar"), con riesgo de que un mis-tap en el `<select>` disparara un changeover real sin que el operario lo notara.
      - **Única excepción al "siempre preguntar":** la restauración por `?linea=` al volver "atrás" desde un punto de control (ver paso "cargando" más abajo) sigue cayendo directo en la grilla sin pasar por este paso — re-preguntar en cada vuelta de un formulario sería fricción pura, no una salvaguarda real.
      - Si la línea ya tenía producto activo (caso "Cambiar producto" desde la grilla), el botón secundario es "Cancelar" (vuelve a la grilla sin activar nada); si no había producto activo, es "Volver a elegir línea".
   3. **Paso "grilla"** — la grilla de puntos de control, con header de contexto ("Producto en producción — {línea}: {producto} — Lote {n}"), botón "Cambiar de Línea" (→ paso 1) y **botón** "Cambiar producto" (→ paso 2, renombrado desde "Agregar otro producto" tras hallazgo de `frontend-ux`: el label sugería producción en paralelo cuando en realidad reemplaza el producto activo de la línea — no hay soporte de productos simultáneos). Es un botón con padding y target táctil real (`px-4 py-2.5 rounded-xl`, borde rojo), no un link de texto. **Ya no hay chips de filtro por familia** — el filtrado de PCs se deriva automáticamente de `productoActivo.familiaSlug` (la familia ya está incluida en el producto seleccionado, pedido explícito del usuario): PCs sin familia asignada siempre se muestran, PCs con familias solo si incluyen la del producto activo. El `?familia=` como query param desapareció por completo — los hrefs de las cards, el back link del punto de control y el dispatch del modo Tapitas en `PesoMedicionesForm` derivan la familia server-side desde `productoActivo.familiaSlug`. Empty state distingue dos casos: "Sin puntos de control configurados" (la línea no tiene ninguno) vs. "Ningún punto de control aplica a {producto} en esta línea" (hay PCs pero ninguno matchea la familia del producto activo) — antes ambos casos mostraban el mismo mensaje de "contactar al administrador", que era engañoso en el segundo caso. La grilla sigue bloqueada hasta que hay producto activo: sin producto activo no se llega a este paso.
@@ -283,7 +283,74 @@ type ProductoActivoLinea = {
 - **Estilos de botón primario/secundario y el card centrado (`rounded-2xl`, paleta roja) están duplicados en los 3 pasos interactivos de este componente** — candidato a extraer a componentes compartidos si el patrón se repite en otro módulo.
 - **Mensajes de error del server (`json.error`) se muestran tal cual al operario sin mapeo a copy más amigable** — aceptable por ahora, revisar si el backend empieza a devolver mensajes más técnicos.
 - **Rate limiting transversal del resto de endpoints de escritura del repo sigue pendiente** — el guard de esta feature es puntual a este endpoint, no una solución general (ver ADR-011 y "Deuda técnica y decisiones pendientes").
-- **Sin tests automatizados** para `activarProductoLinea`, `getProductoActivoDeLinea` ni el guard de concurrencia — mismo criterio que el resto del repo (ver esa misma sección).
+- **Sin tests automatizados** para `activarProductoLinea`, `getProductoActivoDeLinea` ni el guard de concurrencia — mismo criterio que el resto del repo (ver esa misma sección). **Actualización ADR-013:** esto ya no es así para las funciones de generación de `numeroLote` ni para `linea-producto-activo.service.ts` — ver esa sección.
+
+---
+
+## ADR-013: Formato definitivo de `Lote.numeroLote` (flujo automático) + "jornada productiva" 6am-6am
+
+**Contexto:** ADR-011 dejó `Lote.numeroLote` con el placeholder `GEN-{yyyyMMdd}-{HHmmss}`, marcado explícitamente como temporal ("las reglas reales de numeración las va a definir el usuario más adelante" — deuda #9 de `docs/auditoria-2026-07.md`). Esta feature cierra esa deuda para el flujo de uso diario (ADR-012, "producto activo por línea"). El alta MANUAL de lote (`/calidad/lotes/nuevo`, ADR-011) sigue con el placeholder — ver "Alcance" abajo.
+
+**Aprobado por:** `scm-alimentos` (regla de negocio: criterio de vencimiento, corte 6am-6am, bloqueo por vida útil) → `arquitecto-industrial` (sincronización lectura/escritura en la ventana 00:00-05:59, riesgo de colisión determinística por minuto) → implementación → `backend-senior` (encontró y corrigió un bug de timezone reproducido también en el camino legacy) → `seguridad-analista` (aprobado; una observación menor ya corregida).
+
+### Formato: `L-DD/MM/AAAA-AJJJ-hh:mm-ENV`
+
+Nuevo módulo puro `src/lib/calidad/lote-numero.ts` (`generarNumeroLote`), sin dependencias de Prisma/framework:
+
+- `DD/MM/AAAA`: fecha de **vencimiento** del producto (`fechaProduccion + Producto.vidaUtilMeses`, vía `calcularFechaVencimiento` en `src/lib/calidad/lote-pt.ts` — preserva el día del mes con clamp de overflow; `calcularVencimiento`, el `MM/yyyy` que ya usaba Producción Diaria, ahora es un wrapper de esta misma función).
+- `AJJJ`: último dígito del año + día juliano (1-366) de la fecha de **producción**.
+- `hh:mm`: hora de planta (`horaPlanta()`, zona `America/Argentina/Cordoba`) al momento de crear el registro — es **"hora de registro en sistema"**, NO la hora real de inicio de producción (aclaración explícita de `scm-alimentos`, para no sugerir una precisión que el sistema no tiene).
+- `ENV`: código de línea productiva (`LineaProductiva.codigo`; valores reales hoy: 0/1/2/3).
+
+Determinístico por minuto: dos lotes de la misma línea en el mismo minuto generan el mismo string base. `crearLote()` (`src/db/calidad.repository.ts`) le agrega un sufijo de desambiguación (`-02`, `-03`) en reintentos ante colisión real de `numero_lote` — no se depende de que el string cambie solo con el paso del tiempo.
+
+### Alcance: solo el flujo automático — el alta manual sigue con el placeholder legacy
+
+Este formato se genera únicamente cuando `crearLote()` recibe `lineaCodigo` (y por lo tanto también `vidaUtilMeses`) — eso ocurre siempre que el lote se crea desde `activarProductoLinea` (ADR-012, "producto activo por línea"). El alta MANUAL de lote (`/calidad/lotes/nuevo`, ADR-011) **no** asocia línea productiva hoy, y sigue generando `GEN-{yyyyMMdd}-{HHmmss}` (`generarNumeroLoteGenerico()`).
+
+No es una deuda accidental: es una decisión explícita del usuario, porque ese camino manual **no ocurre en la práctica** desde que existe "producto activo por línea" (confirmado al cerrar esta feature, ver hito de `LOG_CONTEXTO.md` del 2026-07-20) — sigue existiendo como building block interno/back-office residual (ver ADR-011, "Actualización"). Si en el futuro se decide asociar línea al alta manual también, el mismo `generarNumeroLote()` aplica sin cambios de diseño.
+
+### Bloqueo de negocio: activar un producto sin vida útil cargada
+
+`activarProductoLineaService` (`src/services/calidad/linea-producto-activo.service.ts`) rechaza con **`409 PRODUCTO_SIN_VIDA_UTIL`** si `Producto.vidaUtilMeses` es `null` o `<= 0` — antes se permitía activar igual. Decisión explícita del usuario tras una auditoría de datos: 9/104 productos activos del maestro no tienen ese campo cargado (2 de ellos, TAPAS en Línea 3 y BIZCOCHOS en Línea 0, estaban activos el día de esta decisión — se van a romper en su próximo changeover hasta que se complete el maestro; riesgo aceptado a conciencia, no un bug).
+
+La validación es `<= 0`, no solo `== null` — hallazgo de `seguridad-analista`: un dato mal cargado en el maestro (0 o negativo) debía dar el mismo `409` claro, no delegar en el `throw` defensivo de `calcularFechaVencimiento` y terminar en un `500` genérico.
+
+### "Jornada productiva": corte de 24hs de 6am a 6am — alcance acotado
+
+Nueva función `jornadaProductiva()` (`src/lib/calidad/fecha-planta.ts`, junto a las preexistentes `hoyPlanta()`/`horaPlanta()`): en vez de cortar el día a medianoche, corta a las 6am — antes de esa hora, "hoy" sigue siendo el día calendario anterior. Usa un solo snapshot de fecha+hora vía `formatToParts` para evitar la ventana de milisegundos entre dos `new Date()` separados justo en el borde de medianoche.
+
+**Se usa en exactamente tres lugares — no en todo el módulo:**
+- El find-or-create de `activarProductoLinea` (decide si corresponde generar un `Lote` nuevo o reusar el existente).
+- La lectura del producto activo desde el endpoint del asistente: `GET /api/v1/lineas-productivas/[lineaId]/producto-activo` (`getProductoActivoDeLinea`).
+- La lectura del producto activo desde el Server Component de la grilla de puntos de control: `src/app/calidad/[lineaId]/[puntoControlId]/page.tsx` (mismo `getProductoActivoDeLinea`, agregado al cerrar esta feature — ver nota abajo).
+
+Razón de este alcance acotado (hallazgo de `arquitecto-industrial`): si la escritura usa el corte 6am-6am pero alguna lectura sigue usando el día calendario (`hoyPlanta()`), en la franja 00:00-05:59 esa lectura le diría al operario "sin producto activo" aunque el find-or-create de la escritura sí lo considere vigente — lectura y escritura quedarían desincronizadas justo en el borde más delicado. El resto del módulo (registros del día, correlativo de pallets, resolución de turno) **sigue usando `hoyPlanta()` sin cambios** — decisión explícita para acotar el blast radius del cambio, no para unificar ambos conceptos de "día".
+
+**Inconsistencia encontrada y corregida al documentar esta feature:** `documentador` encontró que `src/app/calidad/[lineaId]/[puntoControlId]/page.tsx` todavía llamaba `getProductoActivoDeLinea(lineaId, hoyPlanta())` — el día calendario, no `jornadaProductiva()` — mientras que el endpoint `GET .../producto-activo` (el que consume el asistente cliente-side) sí usaba `jornadaProductiva()`. Era exactamente el mismo desajuste lectura/escritura que este ADR resuelve, sobreviviendo en un segundo punto de lectura que no se había actualizado en la implementación original. Corregido en el mismo cierre (cambio de una línea, mismo patrón ya aplicado en el endpoint); typecheck + suite completa verdes tras el fix.
+
+### Bug de timezone encontrado y corregido en el camino
+
+`fechaProduccion` llega a `crearLote()` parseada de un string ISO `"yyyy-MM-dd"` (vía `jornadaProductiva()`/`hoyPlanta()` en los callers) — eso la construye en **UTC medianoche**. Pero `calcularFechaVencimiento` y el cálculo de día juliano leen con getters **locales** (mismo criterio que el resto de `lote-pt.ts`). Mezclar ambos corre el día calendario según el desfasaje horario de la máquina que ejecuta el proceso Node.
+
+Se verificó el bug real en browser: un lote con vencimiento mostrado "19/11" pero día juliano "6201" (que corresponde al día 20) — contradictorio entre sí. Afectaba **ambos** caminos, el nuevo y el legacy `GEN-`.
+
+**Fix:** en `crearLote()`, se reconstruye una sola vez `fechaCalendario` con getters UTC hacia un `Date` de constructor local, antes de bifurcar entre el formato nuevo y el legacy. Test de regresión en `src/db/calidad.repository.lote-numero.test.ts` (Prisma mockeado, sin DB real).
+
+**Lección para no repetir** (mismo patrón de fondo ya visto en el hito de `LOG_CONTEXTO.md` del 2026-07-13, con `toISOString()` — ver el comentario al tope de `fecha-planta.ts`): cualquier función que mezcle un `Date` parseado de un string ISO con getters locales corre el riesgo de desalinear el día calendario según la zona horaria de la máquina que ejecuta el proceso. Cuando se combina un `Date` que vino de un string con getters, hay que decidir explícitamente UTC o local para TODO el cálculo — nunca mezclarlos a mitad de camino.
+
+### Cambios de firma
+
+`crearLote()` y `activarProductoLinea()` (`src/db/calidad.repository.ts`) pasaron de parámetros posicionales a un objeto — decisión de `backend-senior`: dos `number | null` consecutivos (`vidaUtilMeses`, `lineaCodigo`) son fáciles de invertir sin que TypeScript lo detecte con parámetros posicionales.
+
+### Verificación
+
+63 tests en la suite (incluye el test de regresión del bug de timezone), typecheck limpio. Verificado en browser contra Supabase real: activación de producto con el formato nuevo, y bloqueo `409 PRODUCTO_SIN_VIDA_UTIL` con un producto sin vida útil cargada en el maestro.
+
+### Deuda técnica conocida de esta feature
+
+- **Inconsistencia lectura/escritura sin resolver** en `src/app/calidad/[lineaId]/[puntoControlId]/page.tsx` — ver "Inconsistencia encontrada al documentar" más arriba.
+- El resto de la deuda de ADR-011 y ADR-012 (colisión de timestamp bajo alta concurrencia en el formato legacy, sin rate limiting transversal, fallback demo sin gatear, falta de validación `producto.lineaProductivaId` contra la línea activada) sigue vigente sin cambios — no se tocó en esta feature.
 
 ---
 
@@ -358,12 +425,12 @@ Tabla puente `puntoControlId` + `familiaId` (PK compuesta). Declara qué familia
 | `rendimientoTeorico` | `Decimal(10,2)?` | Se interpreta según `unidadRendimiento`. |
 | `unidadRendimiento` | enum `UnidadRendimiento` (`unidades_hora`, `cajas_amasijo`) | |
 | `cajasPorPallet` | `Int?` | |
-| `vidaUtilMeses` | `Int?` | Vida útil en meses desde fecha de producción — origen del vencimiento de PT (`MM/yyyy`). También viaja en `ProductoActivoLinea` (ver ADR-012) para no regresionar la auto-sugerencia en `ProduccionDiariaForm`. |
+| `vidaUtilMeses` | `Int?` | Vida útil en meses desde fecha de producción — origen del vencimiento de PT (`MM/yyyy`) y, desde ADR-013, del segmento `DD/MM/AAAA` de `Lote.numeroLote` en el flujo automático. También viaja en `ProductoActivoLinea` (ver ADR-012) para no regresionar la auto-sugerencia en `ProduccionDiariaForm`. **Desde ADR-013, `null` o `<= 0` bloquea la activación del producto en una línea (`409 PRODUCTO_SIN_VIDA_UTIL`)** — 9/104 productos del maestro real no lo tienen cargado hoy. |
 | `pesoMasaCrudaG` | `Decimal(8,2)?` | |
 | `esSemielaborado` | `Boolean` default `false` | Detectado en el import por texto "semi-elaborado" en la columna OBS del maestro. |
 | `observaciones` | `String?` | |
 | `descripcionVieja` | `String?` | Descripción legacy del maestro origen, solo referencia. |
-| `nomenclaturaLote` | `String?` | Template de lote PT, ej. `L{yyyyMMdd}-{correlativo}` (Arcor), `LC{ddMMyy}-{correlativo}` (marca propia). **No confundir con `Lote.numeroLote` — ver ADR-011.** También viaja en `ProductoActivoLinea` (ver ADR-012). |
+| `nomenclaturaLote` | `String?` | Template de lote PT, ej. `L{yyyyMMdd}-{correlativo}` (Arcor), `LC{ddMMyy}-{correlativo}` (marca propia). **No confundir con `Lote.numeroLote` — ver ADR-011 y ADR-013.** También viaja en `ProductoActivoLinea` (ver ADR-012). |
 | `activo` | `Boolean` default `true` | |
 | `updatedAt` | `DateTime` | Nuevo — antes `Producto` no trackeaba actualizaciones. |
 
@@ -371,11 +438,11 @@ Tabla puente `puntoControlId` + `familiaId` (PK compuesta). Declara qué familia
 
 ### Lote (`lotes`)
 
-Ver ADR-011 para el razonamiento del alta manual y ADR-012 para el find-or-create de "producto activo por línea".
+Ver ADR-011 para el razonamiento del alta manual, ADR-012 para el find-or-create de "producto activo por línea", y ADR-013 para el formato definitivo de `numeroLote` en el flujo automático.
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `numeroLote` | `String` unique | Identifica la corrida de producción en curso. Hoy `GEN-{yyyyMMdd}-{HHmmss}` — placeholder temporal, ver ADR-011. **No confundir con `Producto.nomenclaturaLote`.** |
+| `numeroLote` | `String` unique | Identifica la corrida de producción en curso. **Dos formatos posibles según el origen del lote (ver ADR-013):** `L-DD/MM/AAAA-AJJJ-hh:mm-ENV` cuando el lote se creó vía "producto activo por línea" (tiene código de línea disponible); `GEN-{yyyyMMdd}-{HHmmss}` (placeholder legacy) cuando se creó vía el alta manual (`/calidad/lotes/nuevo`), que no asocia línea productiva. **No confundir con `Producto.nomenclaturaLote`.** |
 | `productoId` | FK → `Producto`, requerida | |
 | `ordenProduccionId` | FK → `OrdenProduccion`, opcional | Para cuando se construya el módulo de Producción (hoy no existe UI/proceso que lo cree — un lote puede existir sin OP, captura directa desde planta). |
 | `lineaProductivaId` | FK → `LineaProductiva`, opcional | Agregado en ADR-012. Nullable porque coexiste con lotes históricos sin línea (previos a esta feature) y con futuros lotes de `OrdenProduccion`. |
@@ -396,7 +463,7 @@ Ver ADR-012. Puntero mutable, un registro por línea (PK = `lineaProductivaId`).
 | `lineaProductivaId` | `String` (UUID), PK, FK → `LineaProductiva` | |
 | `loteActivoId` | `String` (UUID) unique, FK → `Lote`, `onDelete: Restrict` | Un lote no puede ser "activo" de más de una línea a la vez. |
 | `activadoPorId` | `String` (UUID), FK → `Usuario`, `onDelete: Restrict` | |
-| `activadoEn` | `DateTime` | Se compara contra la fecha consultada en `getProductoActivoDeLinea` — si no coincide con hoy, se trata como "sin producto activo". |
+| `activadoEn` | `DateTime` | Se compara contra la fecha consultada en `getProductoActivoDeLinea` — si no coincide con hoy, se trata como "sin producto activo". Desde ADR-013, "hoy" en el find-or-create de escritura y en las dos lecturas de `getProductoActivoDeLinea` (endpoint del asistente y Server Component de la grilla) usan la "jornada productiva" (corte 6am-6am), no el día calendario — ver esa sección. |
 
 ### LineaActivacionLog (`linea_activacion_log`)
 
@@ -456,5 +523,4 @@ npm run db:import-productos -- [ruta-al-xlsx]
 - **Sin relación BOM (bill of materials) semielaborado → producto terminado.** El modelo sabe que TAPAS `esSemielaborado`, pero no hay forma de declarar "ALFAJOR NEGRO usa TAPAS como insumo" — necesario a futuro para trazabilidad completa de recall (insumo semielaborado → producto terminado) y para cálculo de consumo.
 - **Riesgo residual sobre `Lote.creadoPorId` (`onDelete: SetNull`)** si en el futuro se agrega borrado físico de `Usuario` — ver ADR-011. Hoy teórico (el borrado de usuarios es lógico, vía `activo`). Nota: las FK nuevas de ADR-012 (`LineaProduccionEstado`, `LineaActivacionLog`) se definieron `onDelete: Restrict` en vez de repetir este patrón, precisamente para no sumar un segundo punto con el mismo riesgo.
 - **No se valida `producto.lineaProductivaId` contra la línea activada** en `POST /api/v1/lineas-productivas/[lineaId]/producto-activo` — ver deuda conocida de ADR-012. (El selector de UI ya filtra por línea desde 2026-07-14, pero la validación server-side sigue ausente — un POST directo puede activar un producto de otra línea.)
-- **Cero tests automatizados** en el repo, incluidas las features de Alta de Lote (ADR-011) y Producto activo por línea (ADR-012) — sin infraestructura de testing configurada todavía.
-</content>
+- **Cero tests automatizados** en el repo, incluidas las features de Alta de Lote (ADR-011) y Producto activo por línea (ADR-012) — sin infraestructura de testing configurada todavía. **Corrección (ADR-013): esto ya no es preciso para todo el repo** — hay 63 tests en varias suites (`fecha-planta`, `lote-pt`, `lote.service`, `linea-producto-activo.service`, `getTurnoByHora`, `calidad.repository.lote-numero`), Vitest configurado desde 2026-07-15. Sigue faltando cobertura de componentes UI y de la mayoría del repository con DB real.
