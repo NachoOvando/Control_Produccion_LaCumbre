@@ -55,8 +55,8 @@
 | # | Archivo:linea | Categoria | Severidad | Estado | Descripcion | Impacto | Fix propuesto (sin implementar) |
 |---|---|---|---|---|---|---|---|
 | P1 | calidad.repository.ts lineas 12-27, getLineasConPuntosControl | Performance | Baja | Nuevo | El include anidado (linea a puntosControl a puntoControl a familias a familia) trae, para cada linea activa, el join completo en una sola query, resuelto por Prisma con un batch de queries, no una por fila. Se menciona solo para descartar un posible falso positivo de N+1, no se encontro evidencia de problema real con el volumen actual. | Ninguno con el volumen actual, pocas lineas y pocos puntos de control por linea. Podria degradar si el catalogo crece mucho, sin evidencia de eso hoy. | Sin accion, se deja registrado como verificado, no como hallazgo real. |
-| P2 | src/lib/prisma.ts | Performance | Baja | Nuevo | No hay configuracion explicita de limite de conexiones ni timeout en el adapter PrismaPg, corre con los defaults del pool de pg. En un entorno serverless esto puede agotar las conexiones disponibles de Supabase bajo carga concurrente de varias tablets. No hay evidencia en el codigo de que el deploy sea serverless, se senala como riesgo a verificar, no como bug confirmado. | Desconocido sin confirmar la topologia de deploy real. | Confirmar con arquitecto-industrial o infraestructura el modelo de deploy; si es serverless, configurar el adapter con un pool acotado o usar el connection pooler de Supabase (pgbouncer) en vez de conexiones directas por instancia. |
-| P3 | linea-producto-activo.service.ts lineas 33-67, verificarLimiteActivaciones | Performance menor | Baja | Conocido, documentado como aceptable para el volumen actual | Cada activacion de producto dispara un findMany sobre LineaActivacionLog filtrando por ventana de 10 minutos, sin limite de filas explicito (topea en la practica por el propio guard de MAX_ACTIVACIONES_EN_VENTANA=5). Bajo volumen actual esto es intrascendente. | Ninguno confirmado hoy. | Sin accion, opcionalmente agregar un limite explicito de filas como defensa adicional ante un bug futuro que rompa el tope. |
+| P2 | src/lib/prisma.ts | Performance | Baja | **Resuelto (2026-07-20, Lote 4, cierre del plan)** | No habia configuracion explicita de limite de conexiones ni timeout en el adapter PrismaPg, corria con los defaults del pool de pg. Quedo bloqueado en la primera pasada del Lote 4 a la espera de que el usuario confirmara la topologia de deploy de produccion. | Usuario confirmo deploy en Vercel (serverless) — riesgo real de agotar conexiones de Supabase bajo carga concurrente de tablets si no se acota el pool. | Implementado: runtime (`src/lib/prisma.ts`, `DATABASE_URL`) contra el connection pooler de Supabase (PgBouncer, 6543) con `max: 1`, `idleTimeoutMillis: 10_000`, `connectionTimeoutMillis: 10_000`; CLI (`prisma.config.ts`, `DIRECT_URL`) contra conexion directa (5432) para migraciones/studio. Confirmado que `@prisma/adapter-pg` sin `statementNameGenerator` emite prepared statements sin nombre, compatible con PgBouncer transaction mode — comentario de guardia agregado en el codigo para no reintroducir el bug clasico Prisma+PgBouncer si alguien agrega ese callback a futuro. Ver ADR-014 en `docs/architecture.md`. |
+| P3 | linea-producto-activo.service.ts lineas 33-67, verificarLimiteActivaciones | Performance menor | Baja | **Resuelto (2026-07-20, Lote 4)** | Cada activacion de producto disparaba un findMany sobre LineaActivacionLog filtrando por ventana de 10 minutos, sin limite de filas explicito (topeaba en la practica por el propio guard de MAX_ACTIVACIONES_EN_VENTANA=5). Bajo volumen actual esto era intrascendente. | Ninguno confirmado. | Implementado: `take: 50` (constante `TAKE_DEFENSA`) en el `findMany` de `verificarLimiteActivaciones`, con margen amplio sobre el maximo real (5) para no alterar el comportamiento normal — solo actua como tope duro de filas ante un bug futuro que rompa el guard existente. |
 
 ---
 
@@ -81,11 +81,15 @@
 
 Suite de tests corrida antes (76/76, 11 archivos) y despues (76/76, 11 archivos) del lote — sin regresiones. `tsc --noEmit` limpio.
 
-**Lote 4 - Verificacion de infraestructura (no bloqueante, depende de informacion externa):**
-12. P2 (confirmar topologia de deploy y ajustar pool de conexiones si aplica)
-13. P3 (defensa adicional opcional en el guard de activaciones)
+**Lote 4 - Verificacion de infraestructura — COMPLETO (2026-07-20):**
+12. ~~P2~~ (confirmar topologia de deploy y ajustar pool de conexiones si aplica) — primera pasada: se verifico el repo (package.json, next.config.mjs, ausencia de Dockerfile/vercel.json/docs/deployment.md) y no habia evidencia real que confirmara serverless vs. servidor persistente, quedo bloqueado a proposito. **Cierre (2026-07-20):** usuario confirmo deploy en Vercel. Implementado por `arquitecto-industrial` + ejecucion de fix: pooler de Supabase (PgBouncer, `max: 1`) para runtime, conexion directa para el CLI de Prisma via `DIRECT_URL`. Ver ADR-014 en `docs/architecture.md` — resuelto.
+13. ~~P3~~ (defensa adicional en el guard de activaciones: `take: 50` en el `findMany` de `verificarLimiteActivaciones`) — resuelto
+
+Suite de tests corrida antes (76/76, 11 archivos) y despues (76/76, 11 archivos) del lote — sin regresiones. `tsc --noEmit` limpio.
 
 No se propone tocar B4 (ya es deuda aceptada explicitamente por arquitecto-industrial en ADR-012, sin hallazgo nuevo que la agrave).
+
+**Cierre del plan:** Lotes 1 a 4 completos. Todos los items resueltos. Ultimo item, P2, cerrado el 2026-07-20 tras confirmar el usuario que produccion corre en Vercel (ver ADR-014).
 
 ---
 

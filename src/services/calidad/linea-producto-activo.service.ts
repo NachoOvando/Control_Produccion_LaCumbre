@@ -35,10 +35,18 @@ async function verificarLimiteActivaciones(
   usuarioId: string
 ): Promise<ActivarProductoResult | null> {
   const desdeVentana = new Date(Date.now() - VENTANA_MINUTOS * 60_000);
+  // Defensa adicional (Lote 4, P3): el guard normal ya corta en
+  // MAX_ACTIVACIONES_EN_VENTANA=5, este take es solo un tope duro de filas
+  // ante un bug futuro que rompa ese guard (p.ej. VENTANA_MINUTOS mal
+  // configurado o un usuario/línea con un volumen anómalo) — el margen
+  // sobre el máximo real (5) es amplio a propósito para no alterar el
+  // comportamiento normal, solo evitar un findMany sin límite.
+  const TAKE_DEFENSA = 50;
   const recientes = await prisma.lineaActivacionLog.findMany({
     where: { lineaProductivaId, usuarioId, createdAt: { gte: desdeVentana } },
     orderBy: { createdAt: "desc" },
     select: { createdAt: true },
+    take: TAKE_DEFENSA,
   });
 
   if (recientes.length === 0) return null;

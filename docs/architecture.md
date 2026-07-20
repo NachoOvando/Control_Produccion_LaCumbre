@@ -371,6 +371,30 @@ Se verificó el bug real en browser: un lote con vencimiento mostrado "19/11" pe
 
 ---
 
+## ADR-014: Pool de conexiones acotado para runtime serverless (Vercel) + conexión directa para el CLI
+
+**Contexto:** `AUDIT_PLAN.md` (hallazgo P2, Lote 4) dejó pendiente confirmar la topología de deploy de producción antes de tocar la configuración de conexiones de `src/lib/prisma.ts` — no había evidencia en el repo de si el deploy era un servidor Node persistente o serverless. El usuario confirmó que producción corre en **Vercel** (funciones serverless), lo que cambia la severidad real del hallazgo: cada invocación puede levantar una instancia nueva de `PrismaClient`/pool, y sin un límite explícito de conexiones, un pico de tablets escribiendo en paralelo puede agotar las conexiones disponibles del Postgres de Supabase.
+
+**Decisión: dos connection strings distintas para dos consumidores distintos.**
+
+- **Runtime de la app (`src/lib/prisma.ts`, `DATABASE_URL`):** apunta al **connection pooler de Supabase (PgBouncer, modo transacción, puerto 6543)**, con `?pgbouncer=true`. Es el modo correcto para invocaciones serverless de vida corta: cada función toma una conexión del pool solo durante la transacción y la devuelve, en vez de mantener conexiones directas abiertas por instancia.
+- **CLI de Prisma (`prisma.config.ts`, `DIRECT_URL`):** apunta a **conexión directa a Postgres (puerto 5432, sin pooler)**. PgBouncer en modo transacción no soporta las operaciones que `migrate`/`db push`/`studio` necesitan (advisory locks de migración, algunas sentencias DDL) — el CLI corre localmente/en CI, no en el hot path serverless, así que no tiene el problema que el pooler resuelve para el runtime.
+
+**Por qué el adapter actual es compatible con PgBouncer en modo transacción (el bug clásico "Prisma + PgBouncer" no aplica acá):** el bug conocido de Prisma con PgBouncer es específico del motor binario Rust de Prisma (`query engine`), que usa prepared statements con nombre — PgBouncer en modo transacción no garantiza que la misma conexión física sirva dos statements sucesivos de la misma sesión lógica, así que un prepared statement con nombre creado en una conexión puede no existir en la siguiente, rompiendo la query. Este repo usa `@prisma/adapter-pg` (driver `pg` directo, sin motor Rust) **sin** configurar `statementNameGenerator`. Confirmado leyendo `node_modules/@prisma/adapter-pg/dist/index.d.ts`: sin ese callback, el adapter no le asigna nombre a los prepared statements que arma (`name` queda sin definir en la llamada a `pg.Client#query()`), por lo que Postgres los trata como statements **sin nombre** — no se cachean entre conexiones, así que no hay estado de sesión que dependa de qué conexión física del pool sirvió la query anterior. Esto es justamente lo que los hace seguros bajo PgBouncer transaction pooling. **No agregar `statementNameGenerator` sin revisar este ADR primero** — reintroduciría en silencio el bug clásico.
+
+**Pool `max: 1` en el adapter del runtime:** con Vercel, cada invocación de función es efectivamente una instancia de proceso de vida corta. Mantener un pool interno de más de una conexión por instancia no aporta paralelismo real (el pooler de Supabase ya multiplexa muchas conexiones lógicas sobre pocas físicas) y sí puede multiplicar innecesariamente el conteo de conexiones lógicas hacia PgBouncer bajo concurrencia de invocaciones. `max: 1` fuerza a cada instancia de función a usar como máximo una conexión física del pool de `pg` a la vez, delegando el verdadero pooling a PgBouncer. Junto con `idleTimeoutMillis: 10_000` y `connectionTimeoutMillis: 10_000` — para no dejar conexiones ociosas abiertas más de lo necesario en una instancia serverless que puede quedar "congelada" (frozen) entre invocaciones, y para fallar rápido en vez de colgarse si el pooler está saturado.
+
+**Implementación:**
+- `src/lib/prisma.ts`: `PrismaPg({ connectionString, max: 1, idleTimeoutMillis: 10_000, connectionTimeoutMillis: 10_000 })`, con el comentario de guardia sobre `statementNameGenerator` in situ.
+- `prisma.config.ts`: `datasource.url` pasa de `DATABASE_URL` a `DIRECT_URL`.
+- `.env.example`: documenta ambas variables y su propósito distinto.
+
+**Acción manual requerida (fuera del alcance de este cambio, no se tocan secretos):** el usuario debe agregar `DIRECT_URL` a `.env.local` (conexión directa Supabase, puerto 5432, sin `?pgbouncer=true`) y confirmar que `DATABASE_URL` ahí ya apunta al pooler (puerto 6543, con `?pgbouncer=true`); y configurar ambas variables en el panel de Vercel (Production y Preview).
+
+**Cierra P2 de `AUDIT_PLAN.md`.**
+
+---
+
 ## Integración OT (PLC/SCADA) — diseño previsto, NO implementado
 
 Hoy no hay ninguna integración (tampoco con SAP). A futuro se integrarán PLC/SCADA de planta. Restricción no negociable de cualquier diseño que se apruebe: **separación IT/OT** — la red OT no expone la base de datos ni consume la API directamente sin una capa intermedia. El detalle del diseño se documentará cuando `arquitecto-industrial` lo apruebe.
