@@ -6,13 +6,14 @@
 
 ---
 
-### [2026-07-20] - Fix: Lote PT de Producción Diaria pasa a carga 100% manual
+### [2026-07-20] - Fix (dos pasadas): Lote PT de Producción Diaria — de sugerencia rota a valor derivado sin input
 
-- **Contexto:** el usuario reportó que el "Lote PT sugerido por nomenclatura" en Producción Diaria (`L20260720-01`) estaba mal (correlativo/fecha no correspondían al código real), y aclaró que además no quiere ninguna sugerencia ahí: el código lo pone el codificador de planta en el pallet físico, no algo que el sistema deba inventar.
-- **Fix:** `ProduccionDiariaForm.tsx` — se eliminó la derivación por `Producto.nomenclaturaLote` (`lotePtDe`, `lote_pt_editado`); el campo "Lote PT" ahora nace vacío y es 100% manual, sin label "(sugerido por nomenclatura)". Se eliminó `generarLotePT()` de `lote-pt.ts` (quedó sin otros consumidores en el repo) y sus tests; `calcularVencimiento`/`calcularFechaVencimiento` (mismo archivo) no se tocaron.
-- **Decisión de alcance (confirmada con el usuario):** `Producto.nomenclaturaLote` **se mantiene** en el schema y en el maestro importado — dato dormido, sin consumidor hoy, no se justificaba una migración solo para borrarlo. Si en el futuro se decide recuperar la idea (ej. con datos reales de un codificador integrado), el campo ya está poblado.
-- Cambio contenido a un formulario + una función pura sin consumidores — sin cadena de subagentes (criterio de cambio acotado, mismo patrón que otros fixes UI de esta magnitud).
-- **Verificado en browser:** el campo Lote PT entra vacío (sin value, solo placeholder de ejemplo), sin la etiqueta verde; typecheck y suite de tests verdes.
+- **Pasada 1 (revertida en la 2):** el usuario reportó que el "Lote PT sugerido por nomenclatura" (`L20260720-01`) estaba mal calculado, y en un primer mensaje pareció pedir carga 100% manual — se implementó así, eliminando `generarLotePT()`/`Producto.nomenclaturaLote` del flujo.
+- **Corrección del usuario:** no quería carga manual — el código de Lote PT **es un estándar ya definido** por una regla existente: el mismo `Lote.numeroLote` (formato definitivo ADR-013, `L-DD/MM/AAAA-AJJJ-hh:mm-ENV`) que ya se genera al activar el producto en la línea y se muestra en el banner superior del formulario. No hace falta tipearlo ni recalcularlo — todos los pallets del día comparten ese mismo Lote.
+- **Fix definitivo:** `ProduccionDiariaForm.tsx` — el campo "Lote PT" pasó de input editable a **display de solo lectura** (mismo estilo visual que "Vencimiento PT": caja verde con ícono de check) mostrando `productoActivo.numeroLote`. Se quitó `Entrada.lote_pt` (ya no es un dato por pallet) y su validación; el payload usa `productoActivo.numeroLote` directamente para los tres pallets del batch.
+- **Se mantiene de la pasada 1:** `generarLotePT()` y la derivación por `Producto.nomenclaturaLote` siguen eliminados (esa parte del diagnóstico — el cálculo por template estaba mal y es un concepto distinto al Lote administrativo — seguía siendo correcta). `nomenclaturaLote` sigue dormido en el schema/maestro.
+- **Lección para no repetir:** un mismo mensaje del usuario mezcló "el valor está mal" con "no lo quiero sugerido" — la primera lectura interpretó la segunda parte como "que lo tipee el operario", cuando en realidad pedía "que lo calcule bien el sistema, sin intervención". Ante ambigüedad de alcance en un pedido de UX que además toca cómo se completa un dato de trazabilidad, más vale preguntar el valor final esperado (con un ejemplo concreto) antes de implementar, no solo el alcance del cambio.
+- **Verificado en browser:** el campo muestra `L-19/11/2026-6201-12:01-3` (mismo valor que el banner de línea), sin ningún `<input>` en el DOM. Typecheck y suite de tests verdes (73/73).
 
 ---
 

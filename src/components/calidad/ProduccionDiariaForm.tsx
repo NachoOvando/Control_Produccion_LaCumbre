@@ -18,7 +18,6 @@ type Entrada = {
   cajas: string;
   peso_alfajor: string;
   pallet_incompleto: boolean;
-  lote_pt: string;
   observaciones: string;
 };
 
@@ -30,7 +29,6 @@ function crearEntrada(cajasIniciales: string): Entrada {
     cajas: cajasIniciales,
     peso_alfajor: "",
     pallet_incompleto: false,
-    lote_pt: "",
     observaciones: "",
   };
 }
@@ -143,7 +141,6 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
     if (!e.cajas) return "Ingresá la cantidad de cajas";
     if (parseInt(e.cajas) <= 0) return "La cantidad de cajas debe ser mayor a 0";
     if (!e.peso_alfajor) return "Ingresá el peso del alfajor";
-    if (!e.lote_pt.trim()) return "Ingresá el código de lote PT";
     return null;
   };
 
@@ -173,7 +170,9 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
         cajas: parseInt(e.cajas),
         pallet_numero: numeroPallet(idx),
         peso_alfajor: parseFloat(e.peso_alfajor),
-        lote_pt: e.lote_pt.trim(),
+        // Lote PT = el mismo Lote administrativo activo de la línea (numeroLote,
+        // formato definitivo ADR-013) — no es un código distinto por pallet.
+        lote_pt: productoActivo.numeroLote,
         vencimiento_pt: vencimientoFinal.trim(),
       };
       if (e.pallet_incompleto) data.pallet_incompleto = true;
@@ -345,13 +344,15 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
                 {entrada.pallet_incompleto ? "✓ Marcado como incompleto — se registra la cantidad de cajas que lleva" : "¿El pallet quedó incompleto?"}
               </button>
 
-              {/* Lote PT: carga 100% manual — el código lo pone el codificador de
-                  planta en el pallet físico, no lo calcula el sistema. */}
+              {/* Lote PT: es el mismo Lote administrativo activo de la línea
+                  (numeroLote, ADR-013) — no un código distinto por pallet, no
+                  se tipea. Todos los pallets del día comparten el mismo valor. */}
               <div>
                 <label className="block text-xs font-semibold text-gray-500 mb-1">Lote PT</label>
-                <input type="text" value={entrada.lote_pt} placeholder="Ej: L20260707-01"
-                  onChange={(e) => updateEntrada(entrada.id, { lote_pt: e.target.value })}
-                  className="w-full py-2 px-3 rounded-xl border-2 border-gray-200 bg-gray-50 text-sm font-mono text-gray-900 focus:border-[#E1000F] focus:outline-none" />
+                <div className="flex items-center gap-2 py-2 px-3 rounded-xl bg-green-50 border-2 border-green-200">
+                  <svg className="w-4 h-4 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  <span className="text-sm font-bold text-green-800 font-mono truncate">{productoActivo.numeroLote}</span>
+                </div>
               </div>
 
               {/* Observaciones */}
