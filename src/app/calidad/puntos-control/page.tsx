@@ -115,30 +115,30 @@ export default async function PuntosControlPage({
   searchParams: Promise<SearchParams>;
 }) {
   const { linea: lineaInicialId } = await searchParams;
-  let lineasData = LINEAS_DEMO;
-  let productos = DEMO_PRODUCTOS;
+  let lineasData: typeof LINEAS_DEMO = [];
+  let productos: typeof DEMO_PRODUCTOS = [];
 
   try {
     const lineas = await getLineasConPuntosControl("calidad");
-    if (lineas.length > 0) {
-      lineasData = lineas.map((l) => ({
-        id: l.id,
-        nombre: l.nombre.includes("—") ? l.nombre.split("—")[0].trim() : l.nombre,
-        descripcion: l.descripcion ?? "",
-        puntosControl: l.puntosControl.map((pcl) => ({
-          id: pcl.puntoControl.id,
-          nombre: pcl.puntoControl.nombre,
-          descripcion: pcl.puntoControl.descripcion ?? "",
-          orden: pcl.orden,
-          seccion: (pcl.puntoControl as { seccion?: string }).seccion ?? "",
-          // Familias persistidas en puntos_control_familias — label desde DB
-          familias: pcl.puntoControl.familias.map((f) => ({
-            slug: f.familia.slug,
-            nombre: f.familia.nombre,
-          })),
+    // 0 líneas activas es un estado vacío legítimo (catálogo real sin datos),
+    // no un disparador de datos demo — CalidadModuloView ya sabe renderizarlo.
+    lineasData = lineas.map((l) => ({
+      id: l.id,
+      nombre: l.nombre.includes("—") ? l.nombre.split("—")[0].trim() : l.nombre,
+      descripcion: l.descripcion ?? "",
+      puntosControl: l.puntosControl.map((pcl) => ({
+        id: pcl.puntoControl.id,
+        nombre: pcl.puntoControl.nombre,
+        descripcion: pcl.puntoControl.descripcion ?? "",
+        orden: pcl.orden,
+        seccion: (pcl.puntoControl as { seccion?: string }).seccion ?? "",
+        // Familias persistidas en puntos_control_familias — label desde DB
+        familias: pcl.puntoControl.familias.map((f) => ({
+          slug: f.familia.slug,
+          nombre: f.familia.nombre,
         })),
-      }));
-    }
+      })),
+    }));
     const reales = await getProductosActivos();
     productos = reales.map((p) => ({
       id: p.id,
@@ -147,8 +147,18 @@ export default async function PuntosControlPage({
       marca: { nombre: p.marca.nombre },
       lineaProductivaId: p.lineaProductivaId,
     }));
-  } catch {
-    // Sin DB configurada — usar datos de demo
+  } catch (error) {
+    console.error("[calidad] Fallo la carga de líneas/productos:", error);
+    // Solo en modo demo explícito se cae a datos ficticios; en cualquier otro
+    // caso (DB caída, timeout, bug de query) el error propaga al error
+    // boundary (src/app/calidad/error.tsx) — nunca mostrar "Línea 3" ficticia
+    // como si fuera real (integridad HACCP, mismo criterio que ADR-007).
+    if (process.env.DEMO_MODE === "true") {
+      lineasData = LINEAS_DEMO;
+      productos = DEMO_PRODUCTOS;
+    } else {
+      throw error;
+    }
   }
 
   return (

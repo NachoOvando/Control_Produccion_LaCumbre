@@ -111,6 +111,51 @@ function esColisionLoteLinea(e: unknown): boolean {
   );
 }
 
+// Colisión contra la constraint única "registro_unico" (puntoControlId, loteId,
+// fecha, nroMuestra, filaProd) — con la asignación atómica de nroMuestra (ver
+// siguienteValorSecuencia) esto no debería dispararse en operación normal; se
+// detecta igual como defensa en profundidad (ver C6, AUDIT_PLAN.md Lote 2) para
+// no mapear un conflicto de negocio conocido al mismo ERROR_INTERNO genérico
+// que un bug real. `meta.target` puede venir como array de columnas o, para
+// constraints con nombre explícito, como el nombre de la constraint.
+export function esColisionRegistroUnico(e: unknown): boolean {
+  const columnas = columnasDeColision(e);
+  if (columnas === null) return false;
+  if (columnas.length === 1 && columnas[0] === "registro_unico") return true;
+  return (
+    columnas.includes("punto_control_id") &&
+    columnas.includes("lote_id") &&
+    columnas.includes("fecha") &&
+    columnas.includes("nro_muestra")
+  );
+}
+
+// Asigna de forma atómica el próximo valor de una secuencia diaria
+// (pallet_numero/nroMuestra, ver ADR-006 en docs/architecture.md). `tipo` es el
+// puntoControlId: dos puntos de control en la misma línea tienen secuencias
+// independientes, igual que ya exige la constraint registro_unico. Debe
+// ejecutarse dentro de la MISMA transacción que persiste el/los registros —
+// recibe el `tx` en vez de usar el `prisma` global. Devuelve el valor asignado
+// (ya incrementado), no el anterior.
+async function siguienteValorSecuencia(
+  tx: Prisma.TransactionClient,
+  params: { lineaProductivaId: string; fecha: string; tipo: string }
+): Promise<number> {
+  const { lineaProductivaId, fecha, tipo } = params;
+  const rows = await tx.$queryRaw<{ ultimo_valor: number }[]>`
+    INSERT INTO secuencias_diarias (linea_productiva_id, fecha, tipo, ultimo_valor)
+    VALUES (${lineaProductivaId}::uuid, ${fecha}::date, ${tipo}, 1)
+    ON CONFLICT (linea_productiva_id, fecha, tipo)
+    DO UPDATE SET ultimo_valor = secuencias_diarias.ultimo_valor + 1
+    RETURNING ultimo_valor
+  `;
+  const ultimoValor = rows[0]?.ultimo_valor;
+  if (typeof ultimoValor !== "number") {
+    throw new Error("siguienteValorSecuencia: no se pudo leer ultimo_valor tras el upsert atómico");
+  }
+  return ultimoValor;
+}
+
 export async function crearLote(params: {
   productoId: string;
   fechaProduccion: Date;
@@ -284,7 +329,13 @@ export async function getTurnoByHora(horaStr: string): Promise<string | null> {
       }
     }
     return null;
-  } catch {
+  } catch (e) {
+    // No hay turnos activos es un estado de negocio legítimo (tabla `turnos` vacía o
+    // sin ninguno con `activo=true`) y no debería llegar acá: el findMany no lanza en
+    // ese caso, simplemente devuelve []. Cualquier excepción real en este catch es una
+    // falla de infraestructura (conexión caída, timeout, etc.) — la logueamos para no
+    // perder el rastro de por qué un registro quedó sin turno asignado.
+    console.error("[getTurnoByHora] error consultando turnos activos, registro quedará sin turno asignado:", e);
     return null;
   }
 }
@@ -364,72 +415,131 @@ export async function registrarCambioEstadoLote(params: {
   });
 }
 
+// Con la asignación atómica del correlativo (ver ADR-006), `input.nroMuestra`
+// deja de ser el valor persistido: si `input.data` trae la clave
+// `pallet_numero`, se sincroniza con el valor real asignado por el servidor
+// (son el mismo concepto de negocio para Producción Diaria — ver ADR-006).
+function dataConCorrelativoSincronizado(data: Record<string, unknown>, nroMuestra: number): Record<string, unknown> {
+  if (!("pallet_numero" in data)) return data;
+  return { ...data, pallet_numero: nroMuestra };
+}
+
 export async function createRegistroCalidad(input: RegistroCalidadInput) {
-  return prisma.registroCalidad.create({
-    data: {
-      puntoControlId: input.puntoControlId,
-      loteId: input.loteId,
+  return prisma.$transaction(async (tx) => {
+    const nroMuestra = await siguienteValorSecuencia(tx, {
       lineaProductivaId: input.lineaProductivaId,
-      responsableId: input.responsableId,
-      turnoId: input.turnoId ?? null,
-      fuenteOrigen: (input.fuenteOrigen as "tablet" | "api_externa" | "scada_opcua" | "scada_mqtt" | "importacion") ?? "tablet",
-      fecha: new Date(input.fecha),
-      hora: new Date(`1970-01-01T${input.hora}Z`),
-      nroMuestra: input.nroMuestra,
-      filaProd: input.filaProd ?? null,
-      notas: input.notas ?? null,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      data: input.data as any,
-    },
-    include: {
-      puntoControl: true,
-      lote: { include: { producto: true } },
-      lineaProductiva: true,
-      responsable: { select: { id: true, nombre: true } },
-      turno: { select: { id: true, nombre: true } },
-    },
+      fecha: input.fecha,
+      tipo: input.puntoControlId,
+    });
+
+    return tx.registroCalidad.create({
+      data: {
+        puntoControlId: input.puntoControlId,
+        loteId: input.loteId,
+        lineaProductivaId: input.lineaProductivaId,
+        responsableId: input.responsableId,
+        turnoId: input.turnoId ?? null,
+        fuenteOrigen: (input.fuenteOrigen as "tablet" | "api_externa" | "scada_opcua" | "scada_mqtt" | "importacion") ?? "tablet",
+        fecha: new Date(input.fecha),
+        hora: new Date(`1970-01-01T${input.hora}Z`),
+        nroMuestra,
+        filaProd: input.filaProd ?? null,
+        notas: input.notas ?? null,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        data: dataConCorrelativoSincronizado(input.data, nroMuestra) as any,
+      },
+      include: {
+        puntoControl: true,
+        lote: { include: { producto: true } },
+        lineaProductiva: true,
+        responsable: { select: { id: true, nombre: true } },
+        turno: { select: { id: true, nombre: true } },
+      },
+    });
   });
 }
 
 // Persiste un batch de registros + sus entradas de auditoría en una sola transacción.
 // Si cualquier operación falla, todo se revierte (atomicidad HACCP).
+//
+// nroMuestra (ver ADR-006, AUDIT_PLAN.md Lote 2 — C5): el valor que llega en
+// `input.nroMuestra` YA NO es el valor final persistido — el cliente lo sigue
+// mandando (sin tocar los 8 formularios) pero acá se usa SOLO como clave de
+// agrupación *dentro de este mismo batch*: filas con igual
+// (lineaProductivaId, puntoControlId, fecha, nroMuestra-enviado) comparten un
+// mismo pallet/muestra (ver DefectosConformadoForm: 12 filas de una muestra
+// comparten nroMuestra y difieren en filaProd) y reciben UN solo valor
+// asignado atómicamente vía secuencias_diarias. El orden de asignación sigue
+// el orden de aparición del grupo en el batch. Esto además resuelve B1: como
+// la secuencia persiste entre requests, un segundo guardado el mismo día
+// continúa desde donde quedó la anterior — no puede colisionar.
 export async function createRegistrosBatchDB(inputs: RegistroCalidadInput[]) {
-  const ops: Prisma.PrismaPromise<unknown>[] = [];
+  return prisma.$transaction(async (tx) => {
+    const claveDe = (i: RegistroCalidadInput) =>
+      `${i.lineaProductivaId}|${i.puntoControlId}|${i.fecha}|${i.nroMuestra}`;
 
-  for (const input of inputs) {
-    const registroId = crypto.randomUUID();
-    const data = {
-      puntoControlId: input.puntoControlId,
-      loteId: input.loteId,
-      lineaProductivaId: input.lineaProductivaId,
-      responsableId: input.responsableId,
-      turnoId: input.turnoId ?? null,
-      fuenteOrigen: (input.fuenteOrigen as "tablet" | "api_externa" | "scada_opcua" | "scada_mqtt" | "importacion") ?? "tablet",
-      fecha: new Date(input.fecha),
-      hora: new Date(`1970-01-01T${input.hora}Z`),
-      nroMuestra: input.nroMuestra,
-      filaProd: input.filaProd ?? null,
-      notas: input.notas ?? null,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      data: input.data as any,
-    };
+    // Un solo incremento de secuencia por grupo único (no por fila) — el orden
+    // de un Map de JS preserva el orden de inserción, así que el primer grupo
+    // en aparecer recibe el número más bajo.
+    const gruposVistos = new Map<string, { lineaProductivaId: string; fecha: string; puntoControlId: string }>();
+    for (const input of inputs) {
+      const clave = claveDe(input);
+      if (!gruposVistos.has(clave)) {
+        gruposVistos.set(clave, {
+          lineaProductivaId: input.lineaProductivaId,
+          fecha: input.fecha,
+          puntoControlId: input.puntoControlId,
+        });
+      }
+    }
 
-    ops.push(
-      prisma.registroCalidad.create({ data: { id: registroId, ...data } })
-    );
-    ops.push(
-      prisma.auditoriaRegistro.create({
-        data: {
-          registroCalidadId: registroId,
-          accion: "crear",
-          usuarioId: input.responsableId,
-          datosDespues: data as object,
-        },
-      })
-    );
-  }
+    const nroMuestraAsignado = new Map<string, number>();
+    for (const [clave, g] of gruposVistos) {
+      const valor = await siguienteValorSecuencia(tx, {
+        lineaProductivaId: g.lineaProductivaId,
+        fecha: g.fecha,
+        tipo: g.puntoControlId,
+      });
+      nroMuestraAsignado.set(clave, valor);
+    }
 
-  return prisma.$transaction(ops);
+    const ops: Prisma.PrismaPromise<unknown>[] = [];
+    for (const input of inputs) {
+      const registroId = crypto.randomUUID();
+      const nroMuestra = nroMuestraAsignado.get(claveDe(input))!;
+      const data = {
+        puntoControlId: input.puntoControlId,
+        loteId: input.loteId,
+        lineaProductivaId: input.lineaProductivaId,
+        responsableId: input.responsableId,
+        turnoId: input.turnoId ?? null,
+        fuenteOrigen: (input.fuenteOrigen as "tablet" | "api_externa" | "scada_opcua" | "scada_mqtt" | "importacion") ?? "tablet",
+        fecha: new Date(input.fecha),
+        hora: new Date(`1970-01-01T${input.hora}Z`),
+        nroMuestra,
+        filaProd: input.filaProd ?? null,
+        notas: input.notas ?? null,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        data: dataConCorrelativoSincronizado(input.data, nroMuestra) as any,
+      };
+
+      ops.push(
+        tx.registroCalidad.create({ data: { id: registroId, ...data } })
+      );
+      ops.push(
+        tx.auditoriaRegistro.create({
+          data: {
+            registroCalidadId: registroId,
+            accion: "crear",
+            usuarioId: input.responsableId,
+            datosDespues: data as object,
+          },
+        })
+      );
+    }
+
+    return Promise.all(ops);
+  });
 }
 
 export async function getRegistrosByLoteYPuntoControl(loteId: string, puntoControlId: string) {

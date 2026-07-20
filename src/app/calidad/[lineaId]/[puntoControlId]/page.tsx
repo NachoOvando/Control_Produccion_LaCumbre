@@ -125,12 +125,15 @@ export default async function RegistroPuntoControlPage({
     }
   } catch (error) {
     console.error("[calidad] Fallo la carga de punto de control/producto activo:", { lineaId, puntoControlId, error });
-    if (DEMO_RELACIONES[puntoControlId]) {
+    // Mismo criterio que C1/C2 (ADR-007): el fallback demo solo existe gateado
+    // por DEMO_MODE explícito. Sin DEMO_MODE, o si el puntoControlId no matchea
+    // ninguna relación demo, el error propaga — nunca renderizar un punto de
+    // control real sin producto activo resuelto (un registro HACCP apuntando
+    // a un lote inexistente es peor que un error visible).
+    if (process.env.DEMO_MODE === "true" && DEMO_RELACIONES[puntoControlId]) {
       relacion = DEMO_RELACIONES[puntoControlId];
       productoActivo = DEMO_PRODUCTO_ACTIVO;
     } else {
-      // Nunca renderizar un punto de control real sin producto activo resuelto:
-      // un registro HACCP apuntando a un lote inexistente es peor que un error visible.
       throw error;
     }
   }

@@ -16,7 +16,7 @@ export default async function AltaLotePage() {
   const session = await auth();
   const rolPermitido = tieneRol(session?.user?.rol as string | undefined, ROLES_SUPERVISION_CALIDAD);
 
-  let productos = DEMO_PRODUCTOS;
+  let productos: typeof DEMO_PRODUCTOS = [];
   try {
     const reales = await getProductosActivos();
     productos = reales.map((p) => ({
@@ -25,8 +25,17 @@ export default async function AltaLotePage() {
       familia: { nombre: p.familia.nombre },
       marca: { nombre: p.marca.nombre },
     }));
-  } catch {
-    // Sin DB configurada — usar datos de demo
+  } catch (error) {
+    console.error("[calidad] Fallo la carga de productos activos:", error);
+    // Solo en modo demo explícito se cae a datos ficticios; en cualquier otro
+    // caso el error propaga al error boundary — un supervisor no debe poder
+    // dar de alta un lote contra productos demo sin saber que la DB está caída
+    // (mismo criterio de C1, ver ADR-007).
+    if (process.env.DEMO_MODE === "true") {
+      productos = DEMO_PRODUCTOS;
+    } else {
+      throw error;
+    }
   }
 
   return (

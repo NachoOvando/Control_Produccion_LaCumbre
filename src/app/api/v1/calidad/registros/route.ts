@@ -31,7 +31,10 @@ export async function POST(req: NextRequest) {
   const result = await createRegistroService(payload);
 
   if (!result.ok) {
-    return NextResponse.json({ error: result.error, code: result.code, details: result.details }, { status: 400 });
+    // C6 (AUDIT_PLAN.md Lote 2): conflicto de correlativo es un 409, no un 400
+    // genérico de validación — le da al cliente una pista real para reintentar.
+    const status = result.code === "CONFLICTO_CORRELATIVO" ? 409 : 400;
+    return NextResponse.json({ error: result.error, code: result.code, details: result.details }, { status });
   }
 
   return NextResponse.json({ data: result.data }, { status: 201 });

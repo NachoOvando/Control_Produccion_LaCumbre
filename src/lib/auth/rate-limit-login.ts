@@ -3,6 +3,15 @@
 // - Por email: 5 fallos en 15 min bloquean nuevos intentos con ese email
 //   (bloqueo duro). Riesgo residual aceptado: quien conoce el email de un
 //   tercero puede bloquearlo 15 min — se mitiga con el log de detección.
+//   A PROPÓSITO, esto también cuenta intentos contra emails que no existen
+//   en la base (auth.ts paga el mismo bcrypt dummy y llama a
+//   registrarFalloConLog igual que con una password incorrecta) — es lo que
+//   sostiene el anti-enumeración: si se optimizara para no registrar el
+//   fallo cuando el email no existe, un atacante podría distinguir "email
+//   inexistente" de "email real con password mala" por si cuenta o no para
+//   el bloqueo, reabriendo el canal de timing/side-channel que el
+//   DUMMY_HASH fue diseñado para cerrar. No "optimizar" esto sin volver a
+//   evaluar el anti-enumeración con seguridad-analista.
 // - Por IP: 30 fallos en 15 min marcan la IP como sospechosa. SOLO DETECCIÓN
 //   (log), NUNCA bloqueo: en esta topología (single-instance, sin reverse
 //   proxy) la IP sale de headers que el cliente puede falsificar

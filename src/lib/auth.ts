@@ -149,7 +149,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
           if (!usuario || !usuario.activo) {
             // Pagar el mismo bcrypt que el camino de password incorrecta —
-            // ver comentario de DUMMY_HASH.
+            // ver comentario de DUMMY_HASH. registrarFalloConLog acá es a
+            // propósito: un email inexistente cuenta igual que una password
+            // incorrecta para el bloqueo de 5 intentos (ver rate-limit-login.ts,
+            // sección "anti-enumeración") — no saltear este registro para
+            // "optimizar" el caso de email inexistente.
             await bcrypt.compare(credentials.password as string, DUMMY_HASH);
             registrarFalloConLog(email, ip);
             return null;

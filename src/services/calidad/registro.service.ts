@@ -18,6 +18,7 @@ import {
   createRegistroCalidad,
   createRegistrosBatchDB,
   getTurnoByHora,
+  esColisionRegistroUnico,
 } from "@/db/calidad.repository";
 import type { RegistroCalidadInput } from "@/types/calidad";
 
@@ -90,6 +91,17 @@ export async function createRegistroService(rawInput: unknown): Promise<CreateRe
     const registro = await createRegistroCalidad({ ...input, turnoId });
     return { ok: true, data: registro };
   } catch (err) {
+    // Conflicto de negocio conocido (C6, AUDIT_PLAN.md Lote 2): con la
+    // asignación atómica de nroMuestra esto no debería ocurrir en operación
+    // normal, pero se distingue igual de un bug real en vez de ambos caer en
+    // ERROR_INTERNO — evita que el operario reintente a ciegas el mismo guardado.
+    if (esColisionRegistroUnico(err)) {
+      return {
+        ok: false,
+        error: "Ya existe un registro con ese correlativo para este punto de control. Recargá e intentá de nuevo.",
+        code: "CONFLICTO_CORRELATIVO",
+      };
+    }
     console.error("[registro.service] Error al persistir:", err);
     return { ok: false, error: "Error interno al guardar el registro", code: "ERROR_INTERNO" };
   }
@@ -164,22 +176,34 @@ export async function createRegistrosBatchService(
     return { ok: false, error: `${erroresJsonb.length} registro(s) con datos inválidos`, code: "VALIDACION_DATOS", details: erroresJsonb };
   }
 
-  // Resolución de turno — una sola query para todas las horas del batch
+  // Resolución de turno — una sola query por hora única del batch.
+  // Importante: primero se resuelven las horas únicas (awaits secuenciales por hora,
+  // no dentro del Promise.all final) para que el cache quede completo antes de mapear.
+  // Si se llenara el cache dentro de un único Promise.all sobre `validos`, dos items
+  // con la misma hora arrancarían en paralelo y ambos verían el cache vacío antes de
+  // que el primero resuelva, disparando la query de turno dos veces para la misma hora.
+  const horasUnicas = [...new Set(validos.map((v) => v.data.hora.slice(0, 5)))];
   const turnoCache = new Map<string, string | null>();
-  const itemsConTurno: RegistroCalidadInput[] = await Promise.all(
-    validos.map(async (item) => {
-      const horaKey = item.data.hora.slice(0, 5); // "HH:MM"
-      if (!turnoCache.has(horaKey)) {
-        turnoCache.set(horaKey, await getTurnoByHora(item.data.hora));
-      }
-      return { ...item.data, turnoId: turnoCache.get(horaKey) ?? null };
-    })
-  );
+  for (const horaKey of horasUnicas) {
+    turnoCache.set(horaKey, await getTurnoByHora(horaKey));
+  }
+  const itemsConTurno: RegistroCalidadInput[] = validos.map((item) => {
+    const horaKey = item.data.hora.slice(0, 5); // "HH:MM"
+    return { ...item.data, turnoId: turnoCache.get(horaKey) ?? null };
+  });
 
   try {
     const created = await createRegistrosBatchDB(itemsConTurno);
     return { ok: true, data: { count: created.length } };
   } catch (err) {
+    // Ver nota equivalente en createRegistroService — C6.
+    if (esColisionRegistroUnico(err)) {
+      return {
+        ok: false,
+        error: "Uno o más registros del lote ya existen con ese correlativo. Recargá e intentá de nuevo.",
+        code: "CONFLICTO_CORRELATIVO",
+      };
+    }
     console.error("[registro.service] Error en batch:", err);
     return { ok: false, error: "Error interno al guardar los registros", code: "ERROR_INTERNO" };
   }

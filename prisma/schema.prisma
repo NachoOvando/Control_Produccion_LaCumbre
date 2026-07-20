@@ -356,8 +356,32 @@ model LineaProductiva {
   lotes         Lote[]
   estadoActual  LineaProduccionEstado?
   activaciones  LineaActivacionLog[]
+  secuencias    SecuenciaDiaria[]
 
   @@map("lineas_productivas")
+}
+
+// -----------------------------------------------------------------------------
+// Correlativos diarios (pallet, nro. de muestra) — asignación atómica server-side.
+// Ver ADR-006 en docs/architecture.md: reemplaza la derivación en cliente de
+// pallet_numero/nroMuestra (registrosHoy.length/máximo), que no protegía contra
+// escritores concurrentes reales. `tipo` es el puntoControlId (como string):
+// dos puntos de control en la misma línea (ej. temperatura_condensacion y
+// temperatura_tanques) necesitan secuencias independientes, igual que ya lo
+// exige la constraint registro_unico de RegistroCalidad. El incremento es
+// atómico vía INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING (ver
+// siguienteValorSecuencia en src/db/calidad.repository.ts), ejecutado dentro
+// de la misma transacción que persiste los registros.
+model SecuenciaDiaria {
+  lineaProductivaId String   @db.Uuid @map("linea_productiva_id")
+  fecha             DateTime @db.Date
+  tipo              String   // hoy: puntoControlId
+  ultimoValor       Int      @default(0) @map("ultimo_valor")
+
+  lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id])
+
+  @@id([lineaProductivaId, fecha, tipo])
+  @@map("secuencias_diarias")
 }
 
 model Ubicacion {
@@ -469,12 +493,24 @@ model RegistroCalidad {
   deletedBy       Usuario?        @relation("RegistroEliminado", fields: [deletedById], references: [id])
   auditoria       AuditoriaRegistro[]
 
+  // NOTA (auditoría 2026-07-20, Lote 2): con filaProd nullable, Postgres trata
+  // cada NULL como distinto de cualquier otro NULL para efectos de unicidad —
+  // para los puntos de control que NO usan filaProd (todos salvo
+  // defectos_conformado), esta constraint NO impide dos filas con el mismo
+  // nroMuestra. La protección real para esos casos es la asignación atómica
+  // de nroMuestra vía SecuenciaDiaria (ver ADR-006), no esta constraint.
   @@unique([puntoControlId, loteId, fecha, nroMuestra, filaProd], name: "registro_unico")
   @@index([puntoControlId, fecha])
   @@index([loteId])
   @@index([lineaProductivaId, fecha])
   @@index([turnoId, fecha])
   @@index([deletedAt])
+  // Índice único funcional de defensa en profundidad (ADR-006), agregado a
+  // mano en el SQL de la migración porque Prisma no soporta índices
+  // funcionales/expresiones en el DSL:
+  //   CREATE UNIQUE INDEX registros_calidad_pallet_unico
+  //     ON registros_calidad (linea_productiva_id, fecha, (data->>'pallet_numero'))
+  //     WHERE deleted_at IS NULL;
   @@map("registros_calidad")
 }
 

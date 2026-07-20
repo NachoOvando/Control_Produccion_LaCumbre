@@ -505,6 +505,13 @@ type PuntoControlCardProps = {
 };
 
 function PuntoControlCard({ puntoControl, lineaId }: PuntoControlCardProps) {
+  // AUDIT_PLAN.md C7 (2026-07-20): heurística, no un campo estructural. Se
+  // deriva del nombre de display porque hoy `PuntoControl` no tiene un campo
+  // `esPuntoCritico` en el schema — un PCC real cuyo nombre no incluya
+  // literalmente "PCC" deja de marcarse como crítico sin que nadie lo note.
+  // El fix correcto (agregar el campo al modelo PuntoControl) requiere tocar
+  // schema.prisma + migración + poblar el maestro/seed — fuera de alcance de
+  // este fix menor, señalado para decisión explícita (ver AUDIT_PLAN.md).
   const esPCC = puntoControl.nombre.includes("PCC");
 
   return (
