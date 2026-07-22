@@ -6,6 +6,20 @@
 
 ---
 
+### [2026-07-22] - Maestro de Productos promovido a módulo top-level (hermano de Calidad)
+
+- **Contexto:** el usuario indicó que el Maestro de Productos corresponde al mismo nivel jerárquico que el módulo Calidad, no anidado dentro de él. Es dato maestro transversal (lo consume Calidad, pero no es una función de Calidad).
+- **Alcance (confirmado con el usuario: página + API, coherente):**
+  - Página: `src/app/calidad/maestro/` → `src/app/maestro/` (ruta `/maestro`). Back-links internos `/calidad` → `/` ("Volver al inicio").
+  - API: `src/app/api/v1/calidad/maestro/` → `src/app/api/v1/maestro/` (5 recursos: productos, marcas, familias + sus `[id]`, especificaciones). Se actualizaron los 4 fetch de los componentes cliente (`CatalogoPanel`, `EspecificacionesEditor`, `ProductosPanel`) y los comentarios de path en los route.ts.
+  - Home (`src/app/page.tsx`): ahora async con `auth()`, muestra Calidad + Maestro como módulos hermanos; el Maestro está gateado a `admin` (mismo `ROLES_ADMIN_MAESTRO` de ADR-015). Grid pasa a 2 columnas cuando el maestro es visible.
+  - Se quitó el Maestro de las funcionalidades del hub de Calidad (`src/app/calidad/page.tsx`) — el hub volvió a componente síncrono sin `auth()`.
+- **NO se movió** la organización de archivos fuente internos (`components/calidad/maestro/`, `services/calidad/maestro.service.ts`, `lib/calidad/maestro-http.ts`) — son ubicaciones internas, no URLs; moverlas es churn sin beneficio visible y con riesgo de lock en Windows (ya se sufrió un EPERM en este mismo move por el file-watcher del dev server). Queda como deuda cosmética menor si algún día molesta.
+- **Verificado en browser** (dev server limpio, tras borrar `.next` stale que arrastraba types del path viejo): home muestra ambos módulos como admin; `/maestro` carga los 104 productos; **escritura real end-to-end**: crear una familia pegó `POST /api/v1/maestro/familias → 201`. La familia de prueba se borró de la DB después (sin asociaciones, borrado directo seguro). Typecheck limpio, 107/107 tests verdes.
+- **Nota de entorno (reincidente):** mover directorios bajo `src/app/` con un `next dev` corriendo falla con `Permission denied`/EPERM por el file-watcher; además `.next/types` queda con referencias al path viejo y hace fallar `tsc` con un falso positivo. Solución: reintentar el move, y borrar `.next` (o solo `.next/types/app/<ruta-vieja>`) antes del typecheck.
+
+---
+
 ### [2026-07-21] - Bug crítico corregido + relevamiento de planillas TAPAS: "Control Peso Tapas" como punto de control propio
 
 - **Qué se corrigió:** el usuario relevó las planillas físicas reales de planta para el producto TAPAS y encontró que el sistema no coincidía en varios puntos. El hallazgo más importante: **"Control Peso Baño Alfajor" servía DOS modos de UI (alfajor estándar y "tapitas") bajo un solo `schema_json` compartido, pero el payload del modo tapitas nunca coincidió con ese schema — 0 registros se guardaron jamás para TAPAS** (confirmado por consulta directa a la tabla `registros_calidad` antes del fix). Documentado como **ADR-016** en `docs/architecture.md` (mismo día que ADR-015 — es un hito posterior en la misma fecha).

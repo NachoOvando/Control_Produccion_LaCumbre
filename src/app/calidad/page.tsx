@@ -1,9 +1,9 @@
 import Link from "next/link";
-import { auth } from "@/lib/auth";
-import { ROLES_ADMIN_MAESTRO, tieneRol } from "@/lib/auth/roles";
 
 export const dynamic = "force-dynamic";
 
+// El Maestro de Productos ya NO es una funcionalidad de Calidad: se movió a
+// módulo top-level (/maestro), hermano de Calidad — ver src/app/page.tsx.
 const FUNCIONALIDADES = [
   {
     slug: "puntos-control",
@@ -15,18 +15,6 @@ const FUNCIONALIDADES = [
       </svg>
     ),
     activo: true,
-  },
-  {
-    slug: "maestro",
-    nombre: "Maestro de Productos",
-    descripcion: "Alta y edición de productos, marcas, familias y especificaciones de calidad",
-    icono: (
-      <svg className="w-7 h-7 text-[#E1000F]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6A2.25 2.25 0 0 1 6 3.75h2.25A2.25 2.25 0 0 1 10.5 6v2.25a2.25 2.25 0 0 1-2.25 2.25H6a2.25 2.25 0 0 1-2.25-2.25V6ZM3.75 15.75A2.25 2.25 0 0 1 6 13.5h2.25a2.25 2.25 0 0 1 2.25 2.25V18a2.25 2.25 0 0 1-2.25 2.25H6A2.25 2.25 0 0 1 3.75 18v-2.25ZM13.5 6a2.25 2.25 0 0 1 2.25-2.25H18A2.25 2.25 0 0 1 20.25 6v2.25A2.25 2.25 0 0 1 18 10.5h-2.25a2.25 2.25 0 0 1-2.25-2.25V6ZM13.5 15.75a2.25 2.25 0 0 1 2.25-2.25H18a2.25 2.25 0 0 1 2.25 2.25V18A2.25 2.25 0 0 1 18 20.25h-2.25A2.25 2.25 0 0 1 13.5 18v-2.25Z" />
-      </svg>
-    ),
-    activo: true,
-    soloAdmin: true,
   },
   {
     slug: "reportes",
@@ -63,11 +51,8 @@ const FUNCIONALIDADES = [
   },
 ];
 
-export default async function CalidadHubPage() {
-  const session = await auth();
-  const esAdmin = tieneRol(session?.user?.rol as string | undefined, ROLES_ADMIN_MAESTRO);
-  // El maestro solo se muestra a admin; el resto de las funcionalidades a todos.
-  const funcionalidades = FUNCIONALIDADES.filter((f) => !f.soloAdmin || esAdmin);
+export default function CalidadHubPage() {
+  const funcionalidades = FUNCIONALIDADES;
 
   return (
     <div className="min-h-screen bg-[#f5f5f5]">

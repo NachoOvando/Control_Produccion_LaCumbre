@@ -34,7 +34,7 @@ function MarcasCard({ marcas }: { marcas: MarcaRow[] }) {
     setEnviando(true);
     setError(null);
     try {
-      const res = await fetch("/api/v1/calidad/maestro/marcas", {
+      const res = await fetch("/api/v1/maestro/marcas", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nombre: nombre.trim(), lineaNegocio }),
@@ -116,7 +116,7 @@ function FamiliasCard({ familias }: { familias: FamiliaRow[] }) {
     setEnviando(true);
     setError(null);
     try {
-      const res = await fetch("/api/v1/calidad/maestro/familias", {
+      const res = await fetch("/api/v1/maestro/familias", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ nombre: nombre.trim(), slug: slugFinal }),

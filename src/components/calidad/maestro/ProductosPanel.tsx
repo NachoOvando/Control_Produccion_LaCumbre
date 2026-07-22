@@ -184,7 +184,7 @@ function ProductoForm({
     setEnviando(true);
     setError(null);
     try {
-      const url = esEdicion ? `/api/v1/calidad/maestro/productos/${producto!.id}` : "/api/v1/calidad/maestro/productos";
+      const url = esEdicion ? `/api/v1/maestro/productos/${producto!.id}` : "/api/v1/maestro/productos";
       const res = await fetch(url, {
         method: esEdicion ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },

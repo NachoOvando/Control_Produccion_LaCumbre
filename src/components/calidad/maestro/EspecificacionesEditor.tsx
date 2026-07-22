@@ -83,7 +83,7 @@ function EspecFila({ producto, binding, spec }: { producto: ProductoRow; binding
     setEnviando(true);
     setError(null);
     try {
-      const res = await fetch("/api/v1/calidad/maestro/especificaciones", {
+      const res = await fetch("/api/v1/maestro/especificaciones", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

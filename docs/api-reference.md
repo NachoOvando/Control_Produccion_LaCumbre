@@ -213,7 +213,7 @@ El body **nunca** acepta `lineaProductivaId` (viene del path param), `activadoPo
 
 ## Maestro de productos y especificaciones (Producto / Marca / Familia / EspecificacionProducto)
 
-Desde **ADR-015** (2026-07-21) existe un módulo de administración del maestro con endpoints de **escritura** para `Producto`, `Marca`, `Familia` y las especificaciones de calidad por producto.
+Desde **ADR-015** (2026-07-21) existe un módulo de administración del maestro con endpoints de **escritura** para `Producto`, `Marca`, `Familia` y las especificaciones de calidad por producto. **Desde 2026-07-22 el maestro es un módulo top-level (hermano de Calidad):** las rutas pasaron de `/api/v1/calidad/maestro/*` a `/api/v1/maestro/*` y la página de `/calidad/maestro` a `/maestro` — ver hito del 2026-07-22 en `LOG_CONTEXTO.md`.
 
 **Alcance y patrón (importante):**
 
@@ -236,7 +236,7 @@ Cada endpoint agrega sus códigos específicos abajo.
 
 ---
 
-### POST /api/v1/calidad/maestro/productos
+### POST /api/v1/maestro/productos
 
 Alta de producto. Auditada en `auditoria_maestro` (append-only) dentro de la misma transacción.
 
@@ -264,7 +264,7 @@ Alta de producto. Auditada en `auditoria_maestro` (append-only) dentro de la mis
 
 ---
 
-### PATCH /api/v1/calidad/maestro/productos/{id}
+### PATCH /api/v1/maestro/productos/{id}
 
 Edición parcial de producto (todos los campos del POST son opcionales acá). Audita snapshot antes/después.
 
@@ -278,7 +278,7 @@ Edición parcial de producto (todos los campos del POST son opcionales acá). Au
 
 ---
 
-### POST /api/v1/calidad/maestro/marcas
+### POST /api/v1/maestro/marcas
 
 Alta de marca. Auditada.
 
@@ -291,7 +291,7 @@ Alta de marca. Auditada.
 
 ---
 
-### PATCH /api/v1/calidad/maestro/marcas/{id}
+### PATCH /api/v1/maestro/marcas/{id}
 
 Edición parcial (`nombre?`, `lineaNegocio?`, `activa?`). Audita snapshot antes/después.
 
@@ -303,7 +303,7 @@ Edición parcial (`nombre?`, `lineaNegocio?`, `activa?`). Audita snapshot antes/
 
 ---
 
-### POST /api/v1/calidad/maestro/familias
+### POST /api/v1/maestro/familias
 
 Alta de familia. Auditada.
 
@@ -316,7 +316,7 @@ Alta de familia. Auditada.
 
 ---
 
-### PATCH /api/v1/calidad/maestro/familias/{id}
+### PATCH /api/v1/maestro/familias/{id}
 
 Edición parcial (`slug?`, `nombre?`, `activa?`). Audita snapshot antes/después.
 
@@ -328,7 +328,7 @@ Edición parcial (`slug?`, `nombre?`, `activa?`). Audita snapshot antes/después
 
 ---
 
-### POST /api/v1/calidad/maestro/especificaciones
+### POST /api/v1/maestro/especificaciones
 
 Crea o **versiona** una especificación de calidad para un `(producto × punto de control × parámetro)`. Editar **no pisa**: cierra la versión vigente (`vigenteHasta = T`) y abre una nueva (`vigenteDesde = T`, `version + 1`) en la misma transacción y con el mismo timestamp. Todo append-only, auditado en `auditoria_maestro`. Ver ADR-015.
 

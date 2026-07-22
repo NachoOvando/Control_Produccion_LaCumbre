@@ -1,9 +1,9 @@
 /**
- * PATCH /api/v1/calidad/maestro/marcas/:id — edición de marca (solo admin).
+ * PATCH /api/v1/maestro/familias/:id — edición de familia (solo admin).
  */
 
 import { NextRequest } from "next/server";
-import { actualizarMarcaService } from "@/services/calidad/maestro.service";
+import { actualizarFamiliaService } from "@/services/calidad/maestro.service";
 import { gateAdminMaestro, parseBody, responder } from "@/lib/calidad/maestro-http";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +16,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const body = await parseBody(req);
   if (body instanceof Response) return body;
 
-  const result = await actualizarMarcaService(id, body, gate.usuarioId);
+  const result = await actualizarFamiliaService(id, body, gate.usuarioId);
   return responder(result);
 }

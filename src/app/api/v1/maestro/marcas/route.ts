@@ -1,5 +1,5 @@
 /**
- * POST /api/v1/calidad/maestro/marcas — alta de marca (solo admin).
+ * POST /api/v1/maestro/marcas — alta de marca (solo admin).
  */
 
 import { NextRequest } from "next/server";

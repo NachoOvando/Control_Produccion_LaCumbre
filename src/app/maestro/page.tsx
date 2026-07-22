@@ -28,7 +28,7 @@ export default async function MaestroPage() {
       <div className="min-h-screen bg-[#f5f5f5]">
         <header className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-30">
           <div className="max-w-5xl mx-auto flex items-center gap-3">
-            <Link href="/calidad" className="p-2 rounded-xl hover:bg-gray-100 text-gray-600 transition-colors">
+            <Link href="/" className="p-2 rounded-xl hover:bg-gray-100 text-gray-600 transition-colors">
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
               </svg>
@@ -42,8 +42,8 @@ export default async function MaestroPage() {
             <p className="text-sm text-gray-500 mt-1">
               La administración del maestro está reservada al rol administrador — afecta la trazabilidad de exportación.
             </p>
-            <Link href="/calidad" className="inline-block mt-4 text-sm font-semibold text-[#E1000F] hover:underline">
-              Volver a Calidad
+            <Link href="/" className="inline-block mt-4 text-sm font-semibold text-[#E1000F] hover:underline">
+              Volver al inicio
             </Link>
           </div>
         </main>
@@ -64,7 +64,7 @@ export default async function MaestroPage() {
     <div className="min-h-screen bg-[#f5f5f5]">
       <header className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-30">
         <div className="max-w-5xl mx-auto flex items-center gap-3">
-          <Link href="/calidad" className="p-2 rounded-xl hover:bg-gray-100 text-gray-600 transition-colors">
+          <Link href="/" className="p-2 rounded-xl hover:bg-gray-100 text-gray-600 transition-colors">
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
