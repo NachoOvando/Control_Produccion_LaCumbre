@@ -110,9 +110,9 @@ const schemaPesoRelleno = {
 const schemaPesoBano = {
   $schema: "http://json-schema.org/draft-07/schema#",
   title: "Control de Peso de Baño",
-  description: "12 mediciones P1-P12. Registra T° ambiente, T° baño y escurrimiento.",
+  description: "12 mediciones P1-P12. Registra T° ambiente y T° baño. Escurrimiento opcional (no se mide en cada muestra en la práctica de planta).",
   type: "object",
-  required: ["tipo_producto", "mediciones", "temp_ambiente", "temp_bano", "escurrimiento"],
+  required: ["tipo_producto", "mediciones", "temp_ambiente", "temp_bano"],
   additionalProperties: false,
   properties: {
     tipo_producto: {
@@ -163,10 +163,74 @@ const schemaPesoBano = {
   },
 };
 
+// Control Peso Tapas — PC propio y distinto de "Control Peso Baño Alfajor"
+// (ver ADR-015, corrección 2026-07-21: el schema anterior compartido no
+// aceptaba este payload y el guardado fallaba siempre — 0 registros
+// guardados jamás). Cada observación (pico dosificador 1-12) pesa la MISMA
+// tapa dos veces: sin bañar y con baño. La cobertura de chocolate se calcula
+// en el cliente por resta apareada (con_baño[i] - sin_bañar[i]) y se envía
+// ya calculada — NO hay una tercera medición manual de "baño suelto"
+// (confirmado con el usuario: esa fila del diseño anterior no correspondía).
+const schemaPesoTapas = {
+  $schema: "http://json-schema.org/draft-07/schema#",
+  title: "Control de Peso de Tapas",
+  description: "12 observaciones (1 por pico dosificador). Cada una pesa la tapa sin bañar y con baño; la cobertura surge de la resta. T° ambiente y T° baño obligatorios, escurrimiento opcional.",
+  type: "object",
+  required: ["mediciones_tapa", "mediciones_tapa_con_bano", "mediciones_cobertura", "temp_ambiente", "temp_bano"],
+  additionalProperties: false,
+  properties: {
+    mediciones_tapa: {
+      type: "array",
+      minItems: 12,
+      maxItems: 12,
+      items: { type: "number", minimum: 0, maximum: 50, multipleOf: 0.1 },
+      description: "12 pesos de tapa SIN bañar en gramos, uno por pico dosificador",
+    },
+    mediciones_tapa_con_bano: {
+      type: "array",
+      minItems: 12,
+      maxItems: 12,
+      items: { type: "number", minimum: 0, maximum: 60, multipleOf: 0.1 },
+      description: "12 pesos de tapa CON baño en gramos, mismo pico y orden que mediciones_tapa",
+    },
+    mediciones_cobertura: {
+      type: "array",
+      minItems: 12,
+      maxItems: 12,
+      // Rango amplio (incluye negativos): esto es una cota de plausibilidad
+      // física, no el rango de calidad — el objetivo de calidad vive en
+      // EspecificacionProducto (ADR-014/015), no acá (ver ADR-001).
+      items: { type: "number", minimum: -10, maximum: 30, multipleOf: 0.01 },
+      description: "12 diferencias (con_baño - sin_bañar) en gramos, calculadas en el cliente",
+    },
+    temp_ambiente: {
+      type: "number",
+      minimum: 0,
+      maximum: 50,
+      multipleOf: 0.1,
+      description: "Temperatura ambiente en °C",
+    },
+    temp_bano: {
+      type: "number",
+      minimum: 20,
+      maximum: 60,
+      multipleOf: 0.1,
+      description: "Temperatura del baño de repostería en °C",
+    },
+    escurrimiento: {
+      type: "number",
+      minimum: 0,
+      maximum: 100,
+      multipleOf: 0.1,
+      description: "Escurrimiento en gramos (opcional)",
+    },
+  },
+};
+
 const schemaTemperaturaTunelCondensacion = {
   $schema: "http://json-schema.org/draft-07/schema#",
   title: "Control de Temperatura de Condensación — Salida Túnel",
-  description: "Control de temperatura y humedad a la salida del túnel de enfriado. Frecuencia: cada 30 min.",
+  description: "Control de temperatura y humedad a la salida del túnel de enfriado. Frecuencia: cada hora.",
   type: "object",
   required: [
     "humedad_relativa",
@@ -497,7 +561,12 @@ const schemaTrazabilidadInsumos = {
   properties: {
     insumo: {
       type: "string",
-      enum: ["tapas_banadas", "bonobon", "dulce_de_leche", "bano_chocolate"],
+      // tapas_sin_banar: tapa cruda que entra al proceso de baño de TAPAS —
+      // distinto de tapas_banadas (la tapa YA bañada, que es la SALIDA de ese
+      // proceso y el insumo de ENTRADA para armar alfajores). No corresponde
+      // trazar tapas_banadas al producir TAPAS: sería trazar como insumo la
+      // salida del propio proceso (confirmado con el usuario, ver LOG_CONTEXTO).
+      enum: ["tapas_sin_banar", "tapas_banadas", "bonobon", "dulce_de_leche", "bano_chocolate"],
       description: "Tipo de insumo que entra en uso",
     },
     lote_insumo: {
@@ -679,6 +748,7 @@ async function main() {
     pcPesoAlfajor,
     pcPesoRelleno,
     pcPesoBano,
+    pcPesoTapas,
     pcTempTunel,
     pcTempTanques,
     pcDetectorMetales,
@@ -719,6 +789,17 @@ async function main() {
         modulo: ModuloApp.calidad,
         tipoFormulario: TipoFormulario.peso_bano,
         schemaJson: schemaPesoBano,
+      },
+    }),
+    prisma.puntoControl.upsert({
+      where: { nombre: "Control Peso Tapas" },
+      update: { schemaJson: schemaPesoTapas, tipoFormulario: TipoFormulario.peso_bano },
+      create: {
+        nombre: "Control Peso Tapas",
+        descripcion: "12 observaciones (1 por pico dosificador): peso de tapa sin bañar y con baño; la cobertura surge de la resta",
+        modulo: ModuloApp.calidad,
+        tipoFormulario: TipoFormulario.peso_bano,
+        schemaJson: schemaPesoTapas,
       },
     }),
     prisma.puntoControl.upsert({
@@ -812,7 +893,7 @@ async function main() {
       },
     }),
   ]);
-  console.log("✅ Puntos de control creados (11)");
+  console.log("✅ Puntos de control creados (12)");
 
   // ── Relaciones línea ↔ punto de control ────────────────────────────────────
   // Línea 3 — Conformado Alfajores (orden refleja flujo productivo)
@@ -821,6 +902,9 @@ async function main() {
     { pc: pcPesoAlfajor,         orden: 1 },
     { pc: pcPesoRelleno,         orden: 2 },
     { pc: pcPesoBano,            orden: 3 },
+    // Mismo orden que pcPesoBano a propósito: son mutuamente excluyentes por
+    // familia (alfajor_negro vs tapas), nunca se renderizan juntos en la grilla.
+    { pc: pcPesoTapas,           orden: 3 },
     { pc: pcTempTunel,           orden: 4 },
     { pc: pcTempTanques,         orden: 5 },
     { pc: pcDetectorMetales,     orden: 6 },
@@ -834,13 +918,24 @@ async function main() {
     where: { puntoControlId: pcFechadoEnvase.id, lineaProductivaId: linea3.id },
   });
 
+  // Eliminar la relación vieja pcPesoBano↔famTapas (2026-07-21, hallazgo de
+  // seguridad-analista): el upsert de abajo solo AGREGA relaciones, nunca borra
+  // las que dejaron de corresponder. Antes de este fix, "Control Peso Baño
+  // Alfajor" estaba asociado a AMBAS familias; ahora que TAPAS tiene su propio
+  // PC ("Control Peso Tapas"), esta fila vieja debe irse explícitamente — si no,
+  // reaparece la ambigüedad (2 PCs de peso mostrados a la vez para tapas) que
+  // originó el bug de guardado nunca exitoso que este cambio corrige.
+  await prisma.puntoControlFamilia.deleteMany({
+    where: { puntoControlId: pcPesoBano.id, familiaId: famTapas.id },
+  });
+
   // ── Familias por punto de control ───────────────────────────────────────────
   // Reemplaza el hardcodeo de familias[] del frontend demo.
   const relacionesFamilias = [
     { pc: pcPesoAlfajor, familia: famAlfajorNegro },
     { pc: pcPesoRelleno, familia: famAlfajorNegro },
     { pc: pcPesoBano, familia: famAlfajorNegro },
-    { pc: pcPesoBano, familia: famTapas },
+    { pc: pcPesoTapas, familia: famTapas },
   ];
   for (const { pc, familia } of relacionesFamilias) {
     await prisma.puntoControlFamilia.upsert({
@@ -883,6 +978,13 @@ async function main() {
     { clave: "temp_cobertura_1", nombre: "Temp. cobertura tanque 1", unidad: "°C" },
     { clave: "temp_cobertura_2", nombre: "Temp. cobertura tanque 2", unidad: "°C" },
     { clave: "temp_bano", nombre: "Temp. baño", unidad: "°C" },
+    { clave: "peso_cobertura", nombre: "Peso cobertura (tapa)", unidad: "g" },
+    // PCC del plan HACCP (confirmado por el usuario, 2026-07-21): temperatura
+    // interna del producto a la salida del túnel — mide el EFECTO del proceso
+    // de enfriado sobre el producto (a diferencia de los demás campos de esa
+    // planilla, que son condiciones ambientales, la causa). Sigue obligatorio
+    // en el schema; este parámetro habilita cargarle una spec con esCritico: true.
+    { clave: "temp_interna", nombre: "Temp. interna producto (PCC)", unidad: "°C" },
   ] as const;
 
   const paramPorClave = new Map<string, { id: string }>();
@@ -906,9 +1008,16 @@ async function main() {
     { pc: pcPesoRelleno, clave: "peso_relleno", campoData: "mediciones", agregacion: "array_cada" },
     { pc: pcPesoBano, clave: "peso_bano", campoData: "mediciones", agregacion: "derivado" },
     { pc: pcPesoBano, clave: "temp_bano", campoData: "temp_bano", agregacion: "escalar" },
+    // Control Peso Tapas: mismos parámetros lógicos peso_tapa/temp_bano que
+    // Alfajor, pero bindeados a los campos y agregación propios de este PC
+    // (ver ADR-015 — un Parametro puede tener un binding por punto de control).
+    { pc: pcPesoTapas, clave: "peso_tapa", campoData: "mediciones_tapa", agregacion: "array_cada" },
+    { pc: pcPesoTapas, clave: "peso_cobertura", campoData: "mediciones_cobertura", agregacion: "array_cada" },
+    { pc: pcPesoTapas, clave: "temp_bano", campoData: "temp_bano", agregacion: "escalar" },
     { pc: pcTempTunel, clave: "temp_producto", campoData: "temp_producto", agregacion: "escalar" },
     { pc: pcTempTunel, clave: "temp_condensacion", campoData: "temp_condensacion", agregacion: "escalar" },
     { pc: pcTempTunel, clave: "humedad_relativa", campoData: "humedad_relativa", agregacion: "escalar" },
+    { pc: pcTempTunel, clave: "temp_interna", campoData: "temp_interna", agregacion: "escalar" },
     { pc: pcTempTanques, clave: "temp_ddl", campoData: "temp_ddl", agregacion: "escalar" },
     { pc: pcTempTanques, clave: "temp_bon_o_bon", campoData: "temp_bon_o_bon", agregacion: "escalar" },
     { pc: pcTempTanques, clave: "temp_cobertura_1", campoData: "tanque_1_cobertura", agregacion: "escalar" },
@@ -938,7 +1047,7 @@ async function main() {
   console.log("   admin@lacumbre.com.ar          / password123  (admin)");
   console.log("   supervisor.calidad@lacumbre... / password123  (supervisor)");
   console.log("   operador.calidad@lacumbre...   / password123  (operador)");
-  console.log("\n🏭 Línea 3 — 9 puntos de control cargados en orden de flujo productivo");
+  console.log("\n🏭 Línea 3 — 10 puntos de control cargados (Peso Baño Alfajor y Peso Tapas son mutuamente excluyentes por familia, se ve 1 de los 2 a la vez)");
 
   void admin; // evitar unused warning
 }

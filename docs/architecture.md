@@ -132,6 +132,8 @@ En todos los casos, sin `DEMO_MODE=true` el error propaga y lo captura el error 
 
 **Decisión (aprobada por scm-alimentos):** peso del baño = promedio de restas apareadas `P_i c/baño − P_i s/baño`, tomando la última muestra sin baño y la última con baño de la jornada. Se eliminó "solo baño" como tipo de producto.
 
+**Nota (ver ADR-016):** este cálculo por restas apareadas es el diseño para **Alfajor Negro** ("Control Peso Baño Alfajor", agregación `derivado`, se evalúa al cierre de jornada). **TAPAS tiene un punto de control propio ("Control Peso Tapas") con un cálculo por resta APAREADA POR OBSERVACIÓN** (no de cierre de jornada): cada una de las 12 observaciones trae su propia resta `con_baño[i] − sin_bañar[i]`, calculada en el cliente. Son dos diseños distintos para dos puntos de control distintos — no confundir.
+
 ---
 
 ## ADR-009: Autorización de lectura de registros — pendiente de decisión
@@ -183,7 +185,7 @@ El sistema tiene **dos conceptos de "número de lote" con propósitos distintos*
 
 - **`Lote.numeroLote`** (esta feature): identifica la **corrida de producción en curso**. **Actualización 2026-07-20 (ver ADR-013): ya tiene un formato definitivo** (`L-DD/MM/AAAA-AJJJ-hh:mm-ENV`) para el flujo automático de "producto activo por línea" (ADR-012). El formato descrito originalmente acá, `GEN-{yyyyMMdd}-{HHmmss}` (generado por `generarNumeroLoteGenerico()` en `src/db/calidad.repository.ts`), **sigue siendo el que se usa**, pero ya no es un placeholder a resolver — quedó acotado, por decisión explícita del usuario, al alta MANUAL de lote (`/calidad/lotes/nuevo`), que hoy no asocia línea productiva. Ver ADR-013 para el detalle completo.
 - **`Producto.nomenclaturaLote`** — **dado de baja de la UI el 2026-07-20** (decisión del usuario, confirmada en dos pasadas — ver hito de esa fecha en `LOG_CONTEXTO.md`): el template por producto (`L{yyyyMMdd}-{correlativo}`) generaba un código propio por pallet, mal calculado y conceptualmente redundante. Se eliminó `generarLotePT()` (`lote-pt.ts`, sin otros consumidores) y sus tests. **`Producto.nomenclaturaLote` se mantiene en el schema y en el maestro importado** (no ameritaba una migración) pero queda sin consumidor en `src/` — dato dormido.
-- **El campo "Lote PT" de "Producción Diaria" ya NO es un concepto independiente en la práctica**: muestra (solo lectura, sin input) el mismo `Lote.numeroLote` del producto activo de la línea — todos los pallets del día comparten ese valor. La distinción conceptual de este ADR ("dos números de lote, no intercambiables") sigue siendo válida en el modelo de datos (dos campos distintos, `Lote.numeroLote` vs `Producto.nomenclaturaLote`), pero en el flujo real de captura hoy solo se usa `numeroLote` — `nomenclaturaLote` no participa de ningún dato que se guarde.
+- **El campo "Lote PT" de "Producción Diaria" ya NO es un concepto independiente en la práctica**: **Actualización 2026-07-21 (ver ADR-016):** volvió a ser **editable** — muestra por defecto (sugerido) el `Lote.numeroLote` del producto activo de la línea, con override manual persistido en `sessionStorage` y un botón "Usar sugerido" para volver al valor por defecto. (Entre el 2026-07-20 y el 2026-07-21 fue de solo lectura sin input — ver hito de esa fecha en `LOG_CONTEXTO.md` — el relevamiento de planillas físicas de TAPAS mostró que hacía falta declarar un lote distinto en casos puntuales, así que se reabrió la edición sin volver al 100% manual de la primera pasada). La distinción conceptual de este ADR ("dos números de lote, no intercambiables") sigue siendo válida en el modelo de datos (dos campos distintos, `Lote.numeroLote` vs `Producto.nomenclaturaLote`), pero en el flujo real de captura hoy solo se usa `numeroLote` (sugerido o editado) — `nomenclaturaLote` no participa de ningún dato que se guarde.
 
 ### Autorización
 
@@ -223,7 +225,7 @@ Restringido a roles con responsabilidad de supervisión — dar de alta un lote 
 
 **Decisión:** la pregunta "¿qué se está produciendo en esta línea?" se hace **una sola vez por línea** (no por formulario), se persiste server-side, y todos los formularios de esa línea la leen del mismo lugar. Nuevo flujo: **Ingreso a la línea → Ingreso/activación de producto (el lote se genera o reutiliza automáticamente) → grilla de puntos de control.**
 
-**Se retiró `getLoteEnCursoDeLinea`** del repository. Reemplazo documentado explícitamente porque, si alguien busca esa función, tiene que encontrar por qué ya no existe: la heurística vieja inferí­a el lote en curso mirando el último registro de calidad cargado ese día (frágil — dependía de que ya hubiera al menos un registro, y podía arrastrar un producto viejo si el operario tardaba en cargar el primer punto de control). El reemplazo (`getProductoActivoDeLinea`) lee un puntero explícito y persistido (`LineaProduccionEstado`), no infiere nada.
+**Se retiró `getLoteEnCursoDeLinea`** del repository. Reemplazo documentado explícitamente porque, si alguien busca esa función, tiene que encontrar por qué ya no existe: la heurística vieja infería el lote en curso mirando el último registro de calidad cargado ese día (frágil — dependía de que ya hubiera al menos un registro, y podía arrastrar un producto viejo si el operario tardaba en cargar el primer punto de control). El reemplazo (`getProductoActivoDeLinea`) lee un puntero explícito y persistido (`LineaProduccionEstado`), no infiere nada.
 
 ### Modelo de datos — tres piezas nuevas
 
@@ -276,7 +278,7 @@ type ProductoActivoLinea = {
 
 `vidaUtilMeses` y `nomenclaturaLote` son datos de **maestro del producto** (no de la activación en sí), incluidos a propósito: sin ellos, `ProduccionDiariaForm` perdía la auto-sugerencia de vencimiento de PT y de nomenclatura de lote que ya tenía antes de esta feature. Durante el desarrollo se sacaron por error del tipo en un momento y se detectó la regresión (el formulario dejaba de auto-completar esos campos); se volvieron a agregar. Si en el futuro alguien "limpia" este tipo para dejarlo mínimo, tiene que confirmar que esos dos formularios consumidores siguen recibiendo el dato desde otro lado antes de sacarlos. **Desde ADR-013, `vidaUtilMeses` además es obligatorio para poder activar el producto — ver esa sección.** **Desde ADR-015, el tipo ganó además `cajasPorPallet` y un campo opcional `especificaciones: EspecCampo[]` (specs de calidad vigentes del producto para el punto de control en contexto, solo poblado en la page de captura) — ver ADR-015.**
 
-`familiaSlug` se agregó en una iteración posterior (pedido explícito del usuario: "la familia está incluida en el producto seleccionado") para que el filtrado de la grilla de puntos de control se derive del producto activo en vez de un filtro manual — ver más abajo. Poblado desde `producto.familia.slug` en el `include` de `getProductoActivoDeLinea`/`activarProductoLinea` (`src/db/calidad.repository.ts`) y en los dos mappers que aplanan el estado de Prisma (`route.ts` del endpoint y el mapper inline de `[lineaId]/[puntoControlId]/page.tsx`).
+`familiaSlug` se agregó en una iteración posterior (pedido explícito del usuario: "la familia está incluida en el producto seleccionado") para que el filtrado de la grilla de puntos de control se derive del producto activo en vez de un filtro manual — ver más abajo. Poblado desde `producto.familia.slug` en el `include` de `getProductoActivoDeLinea`/`activarProductoLinea` (`src/db/calidad.repository.ts`) y en los dos mappers que aplanan el estado de Prisma (`route.ts` del endpoint y el mapper inline de `[lineaId]/[puntoControlId]/page.tsx`). **Desde ADR-016, `familiaSlug` también se usa para: (a) ocultar el campo "Peso del alfajor" de `ProduccionDiariaForm` cuando la familia activa no es `alfajor_negro`; (b) filtrar la lista de insumos seleccionables de `TrazabilidadInsumosForm`.**
 
 ### UI
 
@@ -435,7 +437,7 @@ Migración `prisma/migrations/20260721170200_maestro_admin_especificaciones/`. D
 
 ### Seed
 
-Catálogo de **13 parámetros + 14 bindings** (`prisma/seed.ts`), estructura derivada de los `schema_json` existentes. **Sin backfill de especificaciones** — los rangos por producto son dato de calidad y se cargan a demanda desde el módulo admin.
+Catálogo de **13 parámetros + 14 bindings** (`prisma/seed.ts`), estructura derivada de los `schema_json` existentes. **Sin backfill de especificaciones** — los rangos por producto son dato de calidad y se cargan a demanda desde el módulo admin. **Actualización (ver ADR-016):** el catálogo creció a 15 parámetros y 18 bindings al agregar "Control Peso Tapas" — ver esa sección para el detalle de qué se sumó.
 
 ### Verificación
 
@@ -448,6 +450,56 @@ Catálogo de **13 parámetros + 14 bindings** (`prisma/seed.ts`), estructura der
 - **B2 (Bajo):** TOCTOU benigno en `verificarRefsProducto` — si una ref (familia/marca/línea) se borra entre el `findUnique` de verificación y el `create`, el resultado es un 500 (P2003) en vez de un 404/409 claro. Benigno hoy (no hay borrado de esas entidades desde la app).
 - **Dato pendiente del usuario:** falta la lista real de PCC del plan HACCP para marcar `esCritico` correctamente en las specs (hoy `esCritico` queda en `false` por defecto).
 - **Diferido:** el flujo formal de tratamiento de desviación de PCC (acción correctiva + firma) — el modelo ya deja el lugar (`criticoMin/Max` + `esCritico`).
+
+---
+
+## ADR-016: Bug crítico corregido — "Control Peso Tapas" como punto de control propio (relevamiento de planillas físicas TAPAS)
+
+**Contexto:** el usuario relevó las planillas físicas reales de planta para el producto TAPAS y encontró que "Control Peso Baño Alfajor" servía **dos** modos de UI (alfajor estándar y "tapitas") bajo un único `schema_json` compartido, pero el payload que armaba el modo tapitas nunca coincidió con ese schema. **Confirmado por consulta directa a `registros_calidad`: 0 registros se guardaron jamás para TAPAS** desde que existe ese modo — un bug crítico de guardado, no una desprolijidad cosmética.
+
+**Aprobado por (cadena completa, sin veto):**
+
+1. **`scm-alimentos`** — auditó las 5 reglas de negocio propuestas (cálculo de cobertura por resta apareada por observación, escurrimiento opcional, `temp_interna` opcional, filtro de insumos por familia, relabel "Pico N"). Dictamen "válida con ajustes", con 3 puntos bloqueantes hasta que el usuario los definiera. **Resueltos por el usuario:** (a) la 3ª fila "BAÑO" del diseño viejo no correspondía — el proceso real es 2 pesadas + resta calculada, se elimina; (b) `temp_interna` **SÍ es PCC** — permanece obligatorio en el schema (se descartó hacerlo opcional); (c) no hace falta insumo de packaging para TAPAS, alcanza con 2 insumos.
+2. **`arquitecto-industrial`** — aprobó crear un `PuntoControl` **nuevo y separado** ("Control Peso Tapas") en vez de forzar un schema `oneOf`/condicional compartido, consistente con ADR-001 ("un punto de control = un schema_json", nunca hardcodeo condicional por familia dentro de un mismo schema). Confirmó que reutilizar los mismos `Parametro` lógicos (`peso_tapa`, `temp_bano`) con **bindings nuevos por punto de control** es el diseño correcto de ADR-015 — no se duplican parámetros de catálogo por PC. No hizo falta migración de Prisma (todo son filas nuevas vía seed). Condición: el servidor no debe confiar ciegamente en el cálculo de cobertura hecho en el cliente sin un chequeo mínimo de plausibilidad — cubierto por los límites `minimum`/`maximum` de `mediciones_cobertura` en el `schema_json` del PC nuevo (mismo patrón que ya usa `peso_bano` estándar; no se agregó recálculo server-side completo, ver deuda).
+3. **Implementación** (backend: seed + helper puro; frontend: formularios).
+4. **`seguridad-analista`** — aprobado con observaciones, **sin veto**. Encontró un **hallazgo Alto real** (confirmado contra la DB, no hipotético): el seed solo hacía `upsert` de `PuntoControlFamilia` y **nunca borraba** la relación vieja `pcPesoBano↔famTapas` — esa fila seguía viva en la base real tras correr el seed nuevo, reintroduciendo la ambigüedad de origen del bug ("2 puntos de control de peso mostrados a la vez para tapas"). **Corregido de inmediato**: se agregó un `deleteMany` explícito antes del upsert (`prisma/seed.ts`, mismo patrón que ya usaba el seed para limpiar la relación de `pcFechadoEnvase`), y se confirmó por consulta directa que la fila vieja ya no existe. Otros hallazgos, no bloqueantes (ver "Deuda" abajo): recálculo server-side de cobertura (Medio, deuda aceptada — mismo patrón que `peso_bano`), filtro de insumos por familia sin enforcement server-side (Bajo, mismo patrón preexistente del repo), `lote_pt` sin `minLength` (Bajo).
+
+### Modelo de datos — filas nuevas, sin migración
+
+- **Nuevo `PuntoControl` "Control Peso Tapas"** (`tipoFormulario: peso_bano`, reutilizado — el dispatch de componente ya distingue el modo por la familia del producto activo, no hace falta un enum nuevo). Su `schema_json` (`schemaPesoTapas`, `prisma/seed.ts`) requiere: `mediciones_tapa[12]` (peso tapa sin bañar, 0–50g), `mediciones_tapa_con_bano[12]` (peso tapa con baño, 0–60g), `mediciones_cobertura[12]` (calculado en el cliente por resta apareada `con_baño[i] − sin_bañar[i]`, rango de **plausibilidad física** `[-10, 30]` — no el rango de calidad, que vive en `EspecificacionProducto`, ver ADR-001/ADR-015), `temp_ambiente`, `temp_bano` (ambas obligatorias); `escurrimiento` opcional.
+- **"Control Peso Baño Alfajor" (el PC preexistente)** pierde la asociación con la familia `tapas` (fix del hallazgo Alto de seguridad, ver `deleteMany` arriba) — vuelve a ser exclusivo de `alfajor_negro`. Su `schema_json` (`schemaPesoBano`) también pasa `escurrimiento` a **opcional** (antes obligatorio) — mismo criterio: no se mide en cada muestra en la práctica de planta.
+- **Nuevos parámetros de catálogo** (ADR-015): `peso_cobertura` (g) y `temp_interna` (°C — el comentario del seed lo marca como PCC del plan HACCP; **hoy el catálogo lo soporta pero no hay ninguna `EspecificacionProducto` cargada** con `esCritico: true` para `temp_interna` — pendiente que el usuario complete la lista de PCC del plan HACCP, ver deuda).
+- **Nuevos bindings** (`PuntoControlParametro`) en "Control Peso Tapas": `peso_tapa`→`mediciones_tapa` (`array_cada`, reutiliza el `Parametro` ya usado en "Control Peso Alfajor" pero con `campoData` propio), `peso_cobertura`→`mediciones_cobertura` (`array_cada`), `temp_bano`→`temp_bano` (`escalar`). Nuevo binding en "Control Temperatura Condensación Túnel": `temp_interna`→`temp_interna` (`escalar`). El catálogo pasa de 13 a **15 parámetros** y de 14 a **18 bindings** (ver ADR-015 para la línea de base).
+- **Nuevo valor de enum** `tapas_sin_banar` en `schemaTrazabilidadInsumos` (catálogo de insumos de "Trazabilidad Insumos"): la tapa cruda que entra al proceso de baño de TAPAS — distinto de `tapas_banadas` (la tapa YA bañada, insumo de ENTRADA para armar alfajores; no corresponde trazarla al producir TAPAS, sería trazar la salida del propio proceso como si fuera un insumo).
+- Descripción de frecuencia corregida en "Control Temperatura Condensación Túnel" ("cada 30 min" → "cada hora") — cosmético, sin cambio de schema.
+
+### Frontend
+
+- **`src/lib/calidad/peso-cobertura.ts`** (nuevo, con test): helper puro `calcularCoberturaPorObservacion(tapa, tapaConBano)` — resta apareada pico a pico, tolera posiciones incompletas (da `NaN` en esa posición sin romper el resto).
+- **`src/components/calidad/PesoMedicionesForm.tsx`:** el modo "Tapitas" se reescribió completo — 2 filas capturadas (antes 3, se eliminó la fila manual "BAÑO" que no correspondía) + 1 fila derivada (cobertura, no editable, calculada en vivo) con indicador de fuera de especificación por celda y un resumen "N valores fuera de especificación" al completar la muestra. Relabel "P1..P12" → "Pico 1..Pico 12" en los 3 formularios de peso (Alfajor, Relleno, Tapas) — cada posición es un pico dosificador físico de la máquina (confirmado por el usuario).
+- **`src/components/calidad/ProduccionDiariaForm.tsx`:** el campo "Peso del alfajor" ahora se oculta (y no se envía en el payload) cuando `productoActivo.familiaSlug !== "alfajor_negro"`. El campo "Lote PT" volvió a ser **editable** (ver ADR-011, actualización): default = `productoActivo.numeroLote` (sugerido, mostrado en verde), editable con override persistido en `sessionStorage` (clave `calidad:lotePt:{lineaProductivaId}:{loteId}` — se resetea solo si cambia el lote activo de la línea) y un botón "Usar sugerido" para volver al valor por defecto.
+- **`src/components/calidad/TrazabilidadInsumosForm.tsx`:** la lista de insumos seleccionables se filtra por `productoActivo.familiaSlug` — con TAPAS activo solo se ofrecen "Tapas Sin Bañar" y "Cobertura de Chocolate"; con alfajor activo, sigue mostrando los 4 insumos originales (uno renombrado de "Baño Chocolate" a "Cobertura de Chocolate" para alinear con el lenguaje real de planta). **Filtro solo de UI, sin enforcement server-side** (mismo patrón preexistente del resto del repo — deuda conocida, no bloqueante).
+
+### Verificación
+
+- 107 tests (14 suites) verdes, typecheck limpio.
+- Verificación **aislada** (sin escribir en la DB) del punto crítico: se comparó el `schema_json` real ya sembrado contra el payload exacto que arma el nuevo código — el payload nuevo (con y sin escurrimiento) valida `true`; un payload con la forma vieja rota (con `mediciones_bano` + `familia`) sigue siendo rechazado por las razones correctas (`additionalProperties`, falta `mediciones_cobertura`).
+- Verificado en browser con Alfajor activo (no se activó TAPAS en la línea real para no escribir datos de negocio sin pedido explícito del usuario): "Control Peso Baño Alfajor" sigue visible para alfajor y "Control Peso Tapas" correctamente oculto (aparece solo con familia tapas); "Peso del alfajor" sigue visible en Producción Diaria; Lote PT editable con override persistente confirmado; Trazabilidad Insumos muestra los 4 insumos originales con alfajor activo.
+- **Hallazgo Alto de seguridad-analista corregido**: `deleteMany` agregado en el seed para la relación vieja `pcPesoBano↔famTapas`, confirmado por consulta directa que la fila ya no existe tras re-correr el seed.
+
+### Deuda técnica conocida de esta feature (aceptada, no bloqueante)
+
+- **(Medio) Sin recálculo server-side de la cobertura de tapas.** El servidor confía en la resta apareada calculada en el cliente, con el `minimum`/`maximum` de `schema_json` como único chequeo de plausibilidad — mismo patrón ya aceptado para `peso_bano` estándar (ADR-008). Decisión de negocio ya cubierta por el rango que definió `scm-alimentos`/`arquitecto-industrial`, no un descuido nuevo.
+- **(Bajo) Filtro de insumos por familia (`TrazabilidadInsumosForm`) es solo de UI**, sin enforcement server-side — mismo patrón preexistente del resto del repo (ver también el filtro de familia de PCs en ADR-012, tampoco enforced server-side).
+- **(Bajo) `lote_pt` sin `minLength`** en el schema de Producción Diaria — riesgo bajo, no bloqueante.
+- **`temp_interna` sigue sin ninguna `EspecificacionProducto` cargada con `esCritico: true`** — el catálogo/bindings están listos, falta que el usuario complete la lista real de PCC del plan HACCP (deuda de arrastre de ADR-015).
+
+### Pendiente para el usuario (no bloqueante, próximo paso)
+
+- Activar TAPAS en Línea 3 requiere cargar `Producto.vidaUtilMeses` para ese producto desde `/calidad/maestro` (bloqueo `409 PRODUCTO_SIN_VIDA_UTIL`, ADR-013) — no se tocó ese dato porque es dato de negocio real que le corresponde cargar al usuario.
+- Cargar la `EspecificacionProducto` de `peso_cobertura`/`peso_tapa`/`temp_ambiente`/`temp_bano` para el producto TAPAS real (hoy no hay ninguna spec cargada para TAPAS).
+- Cargar la lista real de PCC del plan HACCP para poder marcar `esCritico: true` en la spec de `temp_interna` cuando corresponda.
+- Prueba end-to-end completa de guardado real de un registro en "Control Peso Tapas" contra la DB (la verificación de esta sesión fue aislada/sin escritura) — recomendado hacerla la primera vez que se active TAPAS con los datos de maestro completos.
 
 ---
 
@@ -510,6 +562,8 @@ PuntoControl (1) ──< (N) PuntoControlParametro >── (1) Parametro        
 
 Tabla puente `puntoControlId` + `familiaId` (PK compuesta). Declara qué familias aplican a cada punto de control — reemplaza el hardcodeo de familias que antes vivía en componentes del frontend. Mismo patrón que `puntos_control_lineas`.
 
+**Actualización (ver ADR-016):** "Control Peso Baño Alfajor" (`pcPesoBano`) es exclusivo de `alfajor_negro` — la relación con `tapas` que tenía antes se eliminó explícitamente (`deleteMany` en el seed, fix del hallazgo Alto de `seguridad-analista`). TAPAS tiene su propio punto de control ("Control Peso Tapas", `pcPesoTapas`) asociado únicamente a la familia `tapas`. El seed sigue solo **agregando** relaciones vía `upsert` — cualquier reasignación de familia a futuro que implique **quitar** una relación existente necesita el mismo patrón de `deleteMany` explícito antes del upsert, no alcanza con cambiar el array de `relacionesFamilias`.
+
 ### Producto (`productos`)
 
 | Campo | Tipo | Notas |
@@ -525,12 +579,12 @@ Tabla puente `puntoControlId` + `familiaId` (PK compuesta). Declara qué familia
 | `rendimientoTeorico` | `Decimal(10,2)?` | Se interpreta según `unidadRendimiento`. |
 | `unidadRendimiento` | enum `UnidadRendimiento` (`unidades_hora`, `cajas_amasijo`) | |
 | `cajasPorPallet` | `Int?` | |
-| `vidaUtilMeses` | `Int?` | Vida útil en meses desde fecha de producción — origen del vencimiento de PT (`MM/yyyy`) y, desde ADR-013, del segmento `DD/MM/AAAA` de `Lote.numeroLote` en el flujo automático. También viaja en `ProductoActivoLinea` (ver ADR-012) para no regresionar la auto-sugerencia en `ProduccionDiariaForm`. **Desde ADR-013, `null` o `<= 0` bloquea la activación del producto en una línea (`409 PRODUCTO_SIN_VIDA_UTIL`)** — 9/104 productos del maestro real no lo tienen cargado hoy. |
+| `vidaUtilMeses` | `Int?` | Vida útil en meses desde fecha de producción — origen del vencimiento de PT (`MM/yyyy`) y, desde ADR-013, del segmento `DD/MM/AAAA` de `Lote.numeroLote` en el flujo automático. También viaja en `ProductoActivoLinea` (ver ADR-012) para no regresionar la auto-sugerencia en `ProduccionDiariaForm`. **Desde ADR-013, `null` o `<= 0` bloquea la activación del producto en una línea (`409 PRODUCTO_SIN_VIDA_UTIL`)** — 9/104 productos del maestro real no lo tienen cargado hoy (incluye TAPAS, ver ADR-016 "Pendiente para el usuario"). |
 | `pesoMasaCrudaG` | `Decimal(8,2)?` | |
 | `esSemielaborado` | `Boolean` default `false` | Detectado en el import por texto "semi-elaborado" en la columna OBS del maestro. |
 | `observaciones` | `String?` | |
 | `descripcionVieja` | `String?` | Descripción legacy del maestro origen, solo referencia. |
-| `nomenclaturaLote` | `String?` | **Sin uso desde 2026-07-20** (ver ADR-011, "Dos números de lote distintos") — el campo "Lote PT" de Producción Diaria pasó a carga 100% manual. Dato dormido en el schema/maestro, no consumido en `src/`. |
+| `nomenclaturaLote` | `String?` | Dato dormido en el schema/maestro, no consumido en `src/`. **Ver ADR-011 actualización 2026-07-21 (ADR-016):** el campo "Lote PT" de Producción Diaria pasó de solo-lectura a sugerido-editable, pero sigue sin consumir `nomenclaturaLote` — la sugerencia usa `Lote.numeroLote` (el `Lote` administrativo activo), no este campo. |
 | `activo` | `Boolean` default `true` | |
 | `updatedAt` | `DateTime` | Nuevo — antes `Producto` no trackeaba actualizaciones. |
 
@@ -544,7 +598,7 @@ Ver ADR-011 para el razonamiento del alta manual, ADR-012 para el find-or-create
 
 | Campo | Tipo | Notas |
 |---|---|---|
-| `numeroLote` | `String` unique | Identifica la corrida de producción en curso. **Dos formatos posibles según el origen del lote (ver ADR-013):** `L-DD/MM/AAAA-AJJJ-hh:mm-ENV` cuando el lote se creó vía "producto activo por línea" (tiene código de línea disponible); `GEN-{yyyyMMdd}-{HHmmss}` (placeholder legacy) cuando se creó vía el alta manual (`/calidad/lotes/nuevo`), que no asocia línea productiva. **No confundir con `Producto.nomenclaturaLote`.** |
+| `numeroLote` | `String` unique | Identifica la corrida de producción en curso. **Dos formatos posibles según el origen del lote (ver ADR-013):** `L-DD/MM/AAAA-AJJJ-hh:mm-ENV` cuando el lote se creó vía "producto activo por línea" (tiene código de línea disponible); `GEN-{yyyyMMdd}-{HHmmss}` (placeholder legacy) cuando se creó vía el alta manual (`/calidad/lotes/nuevo`), que no asocia línea productiva. **No confundir con `Producto.nomenclaturaLote`.** Desde ADR-016, este es también el valor que sugiere (editable) el campo "Lote PT" de Producción Diaria. |
 | `productoId` | FK → `Producto`, requerida | |
 | `ordenProduccionId` | FK → `OrdenProduccion`, opcional | Para cuando se construya el módulo de Producción (hoy no existe UI/proceso que lo cree — un lote puede existir sin OP, captura directa desde planta). |
 | `lineaProductivaId` | FK → `LineaProductiva`, opcional | Agregado en ADR-012. Nullable porque coexiste con lotes históricos sin línea (previos a esta feature) y con futuros lotes de `OrdenProduccion`. |
@@ -581,26 +635,26 @@ Ver ADR-012. **Append-only** — nunca `update`/`delete`.
 
 ### Parametro (`parametros`) — ADR-015
 
-Catálogo **CERRADO** de parámetros especificables. Solo admin/seed agrega.
+Catálogo **CERRADO** de parámetros especificables. Solo admin/seed agrega. **15 parámetros sembrados hoy** (13 desde ADR-015 + `peso_cobertura` y `temp_interna` agregados en ADR-016).
 
 | Campo | Tipo | Notas |
 |---|---|---|
 | `id` | `String` (UUID), PK | |
-| `clave` | `String` unique | Ej. `peso_alfajor`, `temp_ddl`, `humedad_relativa`. |
-| `nombre` | `String` | Etiqueta legible ("Peso alfajor", "Temp. tanque DDL"). |
+| `clave` | `String` unique | Ej. `peso_alfajor`, `temp_ddl`, `humedad_relativa`, `peso_cobertura`, `temp_interna`. |
+| `nombre` | `String` | Etiqueta legible ("Peso alfajor", "Temp. tanque DDL", "Temp. interna producto (PCC)"). |
 | `unidad` | `String` | Informativa (no hay enforcement de que coincida con la unidad del campo medido — ADR-015, regla 5). |
 | `activo` | `Boolean` default `true` | |
 | `createdAt` / `updatedAt` | `DateTime` | |
 
 ### PuntoControlParametro (`puntos_control_parametros`) — ADR-015
 
-Binding estructural: qué parámetros son medibles en cada punto de control, en qué campo de `data` viven y cómo se agregan. Se siembra en el seed (estructura derivada de los `schema_json`), no es dato editable por el admin.
+Binding estructural: qué parámetros son medibles en cada punto de control, en qué campo de `data` viven y cómo se agregan. Se siembra en el seed (estructura derivada de los `schema_json`), no es dato editable por el admin. **18 bindings sembrados hoy** (14 desde ADR-015 + 4 agregados en ADR-016: `peso_tapa`→`mediciones_tapa`, `peso_cobertura`→`mediciones_cobertura` y `temp_bano`→`temp_bano` en "Control Peso Tapas"; `temp_interna`→`temp_interna` en "Control Temperatura Condensación Túnel").
 
 | Campo | Tipo | Notas |
 |---|---|---|
 | `puntoControlId` | FK → `PuntoControl`, `onDelete: Cascade` | PK compuesta con `parametroId`. |
 | `parametroId` | FK → `Parametro`, `onDelete: Cascade` | |
-| `campoData` | `String` | Clave o JSON-path dentro de `RegistroCalidad.data` (ej. `mediciones`, `temp_ddl`, `filas[].peso_neto`). |
+| `campoData` | `String` | Clave o JSON-path dentro de `RegistroCalidad.data` (ej. `mediciones`, `temp_ddl`, `filas[].peso_neto`, `mediciones_cobertura`). |
 | `agregacion` | enum `AgregacionParametro` (`escalar`, `array_cada`, `array_promedio`, `derivado`) | `escalar` = valor único; `array_cada` = cada elemento del array se compara contra la misma spec; `array_promedio` = se compara el promedio; `derivado` = no se compara en vivo, se evalúa al cierre (ej. `peso_baño`). |
 
 ### EspecificacionProducto (`especificaciones_producto`) — ADR-015
@@ -616,7 +670,7 @@ Spec de calidad **versionada append-only** por la terna (producto × punto de co
 | `objetivo` | `Decimal(10,4)?` | Target. |
 | `aceptacionMin` / `aceptacionMax` | `Decimal(10,4)?` | Rango operativo/de calidad. |
 | `criticoMin` / `criticoMax` | `Decimal(10,4)?` | Límite de inocuidad/PCC (envolvente externo). |
-| `esCritico` | `Boolean` default `false` | Marca PCC. **Hoy siempre `false` por defecto** — falta la lista real de PCC del plan HACCP (dato pendiente del usuario, ver ADR-015). |
+| `esCritico` | `Boolean` default `false` | Marca PCC. **Hoy siempre `false` por defecto** — falta la lista real de PCC del plan HACCP (dato pendiente del usuario, ver ADR-015 y ADR-016). |
 | `version` | `Int` default `1` | Se incrementa en cada versión nueva de la misma terna. |
 | `vigenteDesde` | `TIMESTAMPTZ` | Inicio de vigencia de esta versión. |
 | `vigenteHasta` | `TIMESTAMPTZ?` | Fin de vigencia. **`NULL` = versión vigente.** No hay campo `activo` — esta es la única verdad de vigencia. |
@@ -646,12 +700,19 @@ Log **append-only** de cambios sobre el maestro y las especificaciones. Escrito 
 
 - Se agregó `trazabilidad_insumos`.
 - `fechado_envase` **queda en el enum por compatibilidad histórica**, pero el punto de control está desactivado (`activo: false` en seed): el control de fechado se hace en planilla física.
+- **No se agregó ningún valor nuevo para TAPAS (ver ADR-016):** "Control Peso Tapas" reutiliza `peso_bano` — el dispatch de componente distingue el modo de UI por la familia del producto activo (`productoActivo.familiaSlug`), no por `tipoFormulario`.
 
 ### Punto de control "Trazabilidad Insumos" (Línea 3)
 
 - Un registro por **cambio de lote de insumo** (no por turno).
-- `data` JSONB: `{ insumo: tapas_banadas | bonobon | dulce_de_leche | bano_chocolate, lote_insumo, observaciones? }`.
+- `data` JSONB: `{ insumo: tapas_sin_banar | tapas_banadas | bonobon | dulce_de_leche | bano_chocolate, lote_insumo, observaciones? }`. **`tapas_sin_banar` agregado en ADR-016** (2026-07-21) — la tapa cruda que entra al proceso de baño de TAPAS, distinta de `tapas_banadas` (la tapa ya bañada). En UI, `bano_chocolate` se muestra como "Cobertura de Chocolate" (relabel de ADR-016) y la lista visible se filtra por `productoActivo.familiaSlug` (solo de UI, sin enforcement server-side).
 - Propósito: ante un recall, cruzar el momento del cambio de lote con el correlativo de pallets del día para acotar los pallets afectados.
+
+### Punto de control "Control Peso Tapas" (Línea 3) — ADR-016
+
+- Reutiliza `tipoFormulario: peso_bano`; se distingue de "Control Peso Baño Alfajor" por la familia del producto activo (`tapas` vs `alfajor_negro`), nunca ambos a la vez en la grilla (mismo `orden: 3`, mutuamente excluyentes por `PuntoControlFamilia`).
+- `data` JSONB: `{ mediciones_tapa[12], mediciones_tapa_con_bano[12], mediciones_cobertura[12] (calculado en cliente), temp_ambiente, temp_bano, escurrimiento? }`.
+- Ver ADR-016 para el detalle completo del bug corregido, el modelo de datos y la deuda conocida.
 
 ---
 
@@ -680,7 +741,7 @@ npm run db:import-productos -- [ruta-al-xlsx]
 
 ## Deuda técnica y decisiones pendientes (estado real, no aspiracional)
 
-- **Migrations formales: ya existen.** Desde la feature de Alta de Lote (ADR-011) el repo tiene `prisma/migrations/` versionadas (`20260713164001_init`, `20260713184453_add_lote_creado_por`, `20260714120000_linea_producto_activo`, `20260720174244_secuencias_diarias_correlativos`, `20260721170200_maestro_admin_especificaciones`) — **corrección respecto a una versión anterior de este documento**, que decía que no existían y que el schema se aplicaba con `db push`. Sigue sin haber política escrita de rollback/revisión de migraciones aplicadas; tratarlas como inmutables una vez mergeadas (no editar una migración ya aplicada — estándar global del proyecto).
+- **Migrations formales: ya existen.** Desde la feature de Alta de Lote (ADR-011) el repo tiene `prisma/migrations/` versionadas (`20260713164001_init`, `20260713184453_add_lote_creado_por`, `20260714120000_linea_producto_activo`, `20260720174244_secuencias_diarias_correlativos`, `20260721170200_maestro_admin_especificaciones`) — **corrección respecto a una versión anterior de este documento**, que decía que no existían y que el schema se aplicaba con `db push`. Sigue sin haber política escrita de rollback/revisión de migraciones aplicadas; tratarlas como inmutables una vez mergeadas (no editar una migración ya aplicada — estándar global del proyecto). **ADR-016 no agregó ninguna migración** — todo el cambio son filas nuevas de seed sobre tablas ya existentes.
 - ~~Fallback demo embebido en la page, no gateado por `DEMO_MODE`.~~ **Resuelto (2026-07-20, `AUDIT_PLAN.md` Lote 1).** Ver ADR-007. Las tres instancias (`puntos-control/page.tsx`, `lotes/nuevo/page.tsx`, `[lineaId]/[puntoControlId]/page.tsx`) quedaron gateadas por `DEMO_MODE`.
 - **Rate limiting en `authorize()` de NextAuth (`src/lib/auth.ts`), en `POST /api/v1/calidad/lotes` y en los endpoints de escritura del maestro (ADR-015, deuda B1).** Señalado por `seguridad-analista` como hallazgo no bloqueante hoy, pero a resolver antes de exponer el login o la escritura fuera de la red interna. El guard anti-abuso de ADR-012 (`producto-activo`) es puntual a ese endpoint, no la resolución de este punto transversal.
 - ~~**Sin pantalla de administración del maestro.**~~ **Resuelto (2026-07-21, ADR-015).** Alta/edición de `Producto`/`Marca`/`Familia` ya tiene UI (`/calidad/maestro`) + API de escritura (`POST`/`PATCH /api/v1/calidad/maestro/...`, solo rol `admin`). El script de import sigue como vía de carga masiva.
@@ -688,10 +749,12 @@ npm run db:import-productos -- [ruta-al-xlsx]
 - **Especificaciones de calidad por producto (ADR-015) — deuda residual no bloqueante:**
   - **B1 (Bajo):** sin rate limiting en los endpoints de escritura del maestro (ver punto transversal arriba).
   - **B2 (Bajo):** TOCTOU benigno en `verificarRefsProducto` — una ref borrada entre el `findUnique` y el `create` da un 500 (P2003) en vez de 404/409. Benigno hoy (no hay borrado de familia/marca/línea desde la app).
-  - **Dato pendiente del usuario:** falta la lista real de PCC del plan HACCP para marcar `esCritico` correctamente en las specs (hoy `false` por defecto en todas).
+  - **Dato pendiente del usuario:** falta la lista real de PCC del plan HACCP para marcar `esCritico` correctamente en las specs (hoy `false` por defecto en todas, incluida `temp_interna` — ver ADR-016).
   - **Diferido:** el flujo formal de tratamiento de desviación de PCC (acción correctiva + firma) — el modelo ya deja el lugar (`criticoMin/Max` + `esCritico`).
+- ~~**"Control Peso Baño Alfajor" servía dos modos de UI (alfajor/tapitas) bajo un schema compartido que nunca coincidió con el payload de tapitas — 0 registros de TAPAS guardados jamás.**~~ **Resuelto (2026-07-21, ADR-016).** Nuevo `PuntoControl` "Control Peso Tapas", separado, con su propio `schema_json`. Ver ADR-016 para el modelo completo, el fix del hallazgo Alto de `seguridad-analista` (relación `PuntoControlFamilia` vieja no limpiada) y la deuda residual (recálculo server-side de cobertura, `esCritico` de `temp_interna` pendiente de la lista real de PCC).
 - **Sin relación BOM (bill of materials) semielaborado → producto terminado.** El modelo sabe que TAPAS `esSemielaborado`, pero no hay forma de declarar "ALFAJOR NEGRO usa TAPAS como insumo" — necesario a futuro para trazabilidad completa de recall (insumo semielaborado → producto terminado) y para cálculo de consumo.
 - **Riesgo residual sobre `Lote.creadoPorId` (`onDelete: SetNull`)** si en el futuro se agrega borrado físico de `Usuario` — ver ADR-011. Hoy teórico (el borrado de usuarios es lógico, vía `activo`). Nota: las FK nuevas de ADR-012 (`LineaProduccionEstado`, `LineaActivacionLog`) y las de ADR-015 (`EspecificacionProducto`, `AuditoriaMaestro`) se definieron `onDelete: Restrict` en vez de repetir este patrón, precisamente para no sumar más puntos con el mismo riesgo.
 - **No se valida `producto.lineaProductivaId` contra la línea activada** en `POST /api/v1/lineas-productivas/[lineaId]/producto-activo` — ver deuda conocida de ADR-012. (El selector de UI ya filtra por línea desde 2026-07-14, pero la validación server-side sigue ausente — un POST directo puede activar un producto de otra línea.)
-- **Cero tests automatizados** en el repo — **corrección: ya no es preciso.** Vitest está configurado desde 2026-07-15; a la fecha de ADR-015 hay **99 tests** en varias suites (`fecha-planta`, `lote-pt`, `lote.service`, `linea-producto-activo.service`, `getTurnoByHora`, `calidad.repository.lote-numero`, `calidad.repository.secuencias`, `registro.service`, `especificaciones`, `maestro.service`). Sigue faltando cobertura de componentes UI y de la mayoría del repository con DB real.
+- **Cero tests automatizados** en el repo — **corrección: ya no es preciso.** Vitest está configurado desde 2026-07-15; a la fecha de ADR-016 hay **107 tests** en varias suites (`fecha-planta`, `lote-pt`, `lote.service`, `linea-producto-activo.service`, `getTurnoByHora`, `calidad.repository.lote-numero`, `calidad.repository.secuencias`, `registro.service`, `especificaciones`, `maestro.service`, `peso-cobertura`). Sigue faltando cobertura de componentes UI y de la mayoría del repository con DB real.
 - ~~**Inconsistencia de numeración ADR-015 en el código.**~~ **Resuelto (2026-07-21):** los comentarios se corrigieron a ADR-015. Quedan a propósito dos "ADR-014": `prisma.ts` (referencia legítima al pooler) y el comentario del SQL de la migración aplicada (no se edita para preservar el checksum). Ver la nota al inicio de ADR-015.
+</content>

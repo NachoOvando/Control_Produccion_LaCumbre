@@ -10,17 +10,24 @@ import type { ProductoActivoLinea } from "@/types/calidad";
 
 type Props = { puntoControlId: string; lineaProductivaId: string; productoActivo: ProductoActivoLinea };
 
-const INSUMOS = [
-  { valor: "tapas_banadas", label: "Tapas Bañadas" },
-  { valor: "bonobon", label: "Bonobon" },
-  { valor: "dulce_de_leche", label: "Dulce de Leche" },
-  { valor: "bano_chocolate", label: "Baño Chocolate" },
+// Insumos trazables por familia de producto activo (Línea 3 produce alfajor
+// y tapas, con insumos distintos): "tapas_banadas" es la tapa YA bañada,
+// insumo de ENTRADA para armar alfajores — no corresponde al producir tapas,
+// sería trazar la salida del propio proceso. "tapas_sin_banar" es la tapa
+// cruda que entra al proceso de baño de TAPAS. "bano_chocolate" (Cobertura de
+// Chocolate) es el mismo insumo físico en ambos procesos.
+const INSUMOS_TODOS = [
+  { valor: "tapas_sin_banar", label: "Tapas Sin Bañar", familias: ["tapas"] },
+  { valor: "tapas_banadas", label: "Tapas Bañadas", familias: ["alfajor_negro"] },
+  { valor: "bonobon", label: "Bonobon", familias: ["alfajor_negro"] },
+  { valor: "dulce_de_leche", label: "Dulce de Leche", familias: ["alfajor_negro"] },
+  { valor: "bano_chocolate", label: "Cobertura de Chocolate", familias: ["alfajor_negro", "tapas"] },
 ] as const;
 
-type InsumoValor = (typeof INSUMOS)[number]["valor"];
+type InsumoValor = (typeof INSUMOS_TODOS)[number]["valor"];
 
 function labelInsumo(valor: string): string {
-  return INSUMOS.find((i) => i.valor === valor)?.label ?? valor;
+  return INSUMOS_TODOS.find((i) => i.valor === valor)?.label ?? valor;
 }
 
 // Un registro por CAMBIO de lote de insumo: cuando entra en uso un lote nuevo se
@@ -32,6 +39,16 @@ export function TrazabilidadInsumosForm({ puntoControlId, lineaProductivaId, pro
   const { registros: registrosHoy, cargando: cargandoHoy, esDemo } = useRegistrosDelDia(puntoControlId, lineaProductivaId, refreshKey);
 
   const loteId = productoActivo.loteId;
+  // Filtrado por familia del producto activo — evita registrar (y dejar como
+  // falso rastro ante un recall) insumos que no corresponden al proceso en
+  // curso. Fallback a la lista completa si la familia no matchea ninguna regla
+  // conocida (no debería pasar en Línea 3, pero evita esconder insumos por error).
+  const insumosDisponibles = useMemo(() => {
+    const familia = productoActivo.familiaSlug;
+    const filtrados = INSUMOS_TODOS.filter((i) => (i.familias as readonly string[]).includes(familia));
+    return filtrados.length > 0 ? filtrados : INSUMOS_TODOS;
+  }, [productoActivo.familiaSlug]);
+
   const [insumo, setInsumo] = useState<InsumoValor | "">("");
   const [loteInsumo, setLoteInsumo] = useState("");
   const [hora, setHora] = useState(horaPlanta());
@@ -92,7 +109,7 @@ export function TrazabilidadInsumosForm({ puntoControlId, lineaProductivaId, pro
       <div className="bg-white rounded-2xl p-4 border border-gray-100">
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">En uso ahora</p>
         <div className="grid grid-cols-2 gap-2">
-          {INSUMOS.map(({ valor, label }) => {
+          {insumosDisponibles.map(({ valor, label }) => {
             const vigente = enUsoAhora.get(valor);
             return (
               <div key={valor} className={`rounded-xl border-2 p-3 ${vigente ? "border-green-200 bg-green-50" : "border-gray-100 bg-gray-50"}`}>
@@ -119,7 +136,7 @@ export function TrazabilidadInsumosForm({ puntoControlId, lineaProductivaId, pro
         <div>
           <p className="text-xs font-semibold text-gray-500 mb-1.5">Insumo</p>
           <div className="grid grid-cols-2 gap-2">
-            {INSUMOS.map(({ valor, label }) => (
+            {insumosDisponibles.map(({ valor, label }) => (
               <button key={valor} type="button" onClick={() => setInsumo(valor)}
                 className={`py-3.5 px-3 rounded-xl text-sm font-bold border-2 transition-all active:scale-95 ${insumo === valor ? "bg-[#E1000F] text-white border-[#c0000d] shadow" : "bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100"}`}>
                 {label}

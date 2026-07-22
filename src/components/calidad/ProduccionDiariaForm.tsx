@@ -39,10 +39,8 @@ type CampoActivo =
   | { entradaId: null; campo: "tiempo_tunel" }
   | null;
 
-const CAMPOS_NUMERICOS: { key: CampoNumerico; label: string; unidad?: string }[] = [
-  { key: "cajas", label: "Cajas producidas", unidad: "cajas" },
-  { key: "peso_alfajor", label: "Peso del alfajor", unidad: "g" },
-];
+const CAMPO_CAJAS: { key: CampoNumerico; label: string; unidad?: string } = { key: "cajas", label: "Cajas producidas", unidad: "cajas" };
+const CAMPO_PESO_ALFAJOR: { key: CampoNumerico; label: string; unidad?: string } = { key: "peso_alfajor", label: "Peso del alfajor", unidad: "g" };
 
 export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, productoActivo }: Props) {
   const { data: session } = useSession();
@@ -51,6 +49,13 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
   const { registros: registrosHoy, cargando: cargandoHoy, esDemo } = useRegistrosDelDia(puntoControlId, lineaProductivaId, refreshKey);
 
   const loteId = productoActivo.loteId;
+  // "Peso del alfajor" es específico de la familia alfajor — no corresponde
+  // mostrarlo (ni enviarlo) con otros productos activos, como TAPAS.
+  const esAlfajor = productoActivo.familiaSlug === "alfajor_negro";
+  const camposNumericos = useMemo(
+    () => (esAlfajor ? [CAMPO_CAJAS, CAMPO_PESO_ALFAJOR] : [CAMPO_CAJAS]),
+    [esAlfajor]
+  );
   // Estándar de cajas por pallet del maestro: con estándar, el campo queda
   // bloqueado en ese valor y solo se edita marcando el pallet como incompleto
   // (regla auditada por scm-alimentos — divergencia = declaración explícita).
@@ -92,6 +97,25 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
     : null;
   const [vencimientoManual, setVencimientoManual] = useState("");
 
+  // Lote PT: sugerido por defecto (numeroLote del producto activo), editable
+  // si hace falta declarar otro. El override persiste en sessionStorage,
+  // scopeado a (línea, lote activo) — un changeover de producto/línea activa
+  // un lote nuevo y el override anterior no debe arrastrarse a ese lote.
+  const lotePtStorageKey = `calidad:lotePt:${lineaProductivaId}:${loteId}`;
+  const [lotePtOverride, setLotePtOverride] = useState<string>(() => {
+    if (typeof window === "undefined") return "";
+    return sessionStorage.getItem(lotePtStorageKey) ?? "";
+  });
+  const lotePtActual = lotePtOverride.trim() !== "" ? lotePtOverride.trim() : productoActivo.numeroLote;
+  const lotePtEsSugerido = lotePtOverride.trim() === "";
+
+  const actualizarLotePt = (valor: string) => {
+    setLotePtOverride(valor);
+    if (typeof window === "undefined") return;
+    if (valor.trim() === "") sessionStorage.removeItem(lotePtStorageKey);
+    else sessionStorage.setItem(lotePtStorageKey, valor);
+  };
+
   const updateEntrada = useCallback((id: string, patch: Partial<Entrada>) => {
     setEntradas((prev) => prev.map((e) => (e.id === id ? { ...e, ...patch } : e)));
   }, []);
@@ -128,9 +152,9 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
       setEditandoTunel(false);
       return;
     }
-    const idx = CAMPOS_NUMERICOS.findIndex((c) => c.key === campoActivo.campo);
-    if (idx < CAMPOS_NUMERICOS.length - 1) {
-      setCampoActivo({ entradaId: campoActivo.entradaId, campo: CAMPOS_NUMERICOS[idx + 1].key });
+    const idx = camposNumericos.findIndex((c) => c.key === campoActivo.campo);
+    if (idx < camposNumericos.length - 1) {
+      setCampoActivo({ entradaId: campoActivo.entradaId, campo: camposNumericos[idx + 1].key });
     } else {
       setCampoActivo(null);
     }
@@ -141,7 +165,7 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
   const camposIncompletos = (e: Entrada) => {
     if (!e.cajas) return "Ingresá la cantidad de cajas";
     if (parseInt(e.cajas) <= 0) return "La cantidad de cajas debe ser mayor a 0";
-    if (!e.peso_alfajor) return "Ingresá el peso del alfajor";
+    if (esAlfajor && !e.peso_alfajor) return "Ingresá el peso del alfajor";
     return null;
   };
 
@@ -170,12 +194,13 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
       const data: Record<string, unknown> = {
         cajas: parseInt(e.cajas),
         pallet_numero: numeroPallet(idx),
-        peso_alfajor: parseFloat(e.peso_alfajor),
-        // Lote PT = el mismo Lote administrativo activo de la línea (numeroLote,
-        // formato definitivo ADR-013) — no es un código distinto por pallet.
-        lote_pt: productoActivo.numeroLote,
+        // Lote PT: sugerido = numeroLote del Lote administrativo activo
+        // (ADR-013), editable con override persistido en sessionStorage —
+        // todos los pallets del batch comparten el mismo valor.
+        lote_pt: lotePtActual,
         vencimiento_pt: vencimientoFinal.trim(),
       };
+      if (esAlfajor) data.peso_alfajor = parseFloat(e.peso_alfajor);
       if (e.pallet_incompleto) data.pallet_incompleto = true;
       if (e.observaciones.trim()) data.observaciones = e.observaciones.trim();
       // Tiempo de túnel viaja una sola vez por batch, en la primera entrada
@@ -293,8 +318,8 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
             </div>
             <div className="p-4 space-y-4">
               {/* Campos numéricos */}
-              <div className="grid grid-cols-2 gap-2">
-                {CAMPOS_NUMERICOS.map(({ key, label, unidad }) => {
+              <div className={`grid gap-2 ${camposNumericos.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+                {camposNumericos.map(({ key, label, unidad }) => {
                   const activo = campoActivo && "entradaId" in campoActivo && campoActivo.entradaId === entrada.id && campoActivo.campo === key;
                   // Con estándar del maestro y pallet completo, las cajas quedan
                   // bloqueadas en el estándar — se editan marcando el pallet incompleto.
@@ -352,15 +377,29 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
                 {entrada.pallet_incompleto ? "✓ Marcado como incompleto — se registra la cantidad de cajas que lleva" : "¿El pallet quedó incompleto?"}
               </button>
 
-              {/* Lote PT: es el mismo Lote administrativo activo de la línea
-                  (numeroLote, ADR-013) — no un código distinto por pallet, no
-                  se tipea. Todos los pallets del día comparten el mismo valor. */}
+              {/* Lote PT: sugerido = numeroLote del Lote administrativo activo
+                  (ADR-013). Editable si hace falta declarar otro; el override
+                  persiste en sessionStorage mientras dure esta activación de
+                  línea/producto. Todos los pallets del día comparten el mismo valor. */}
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1">Lote PT</label>
-                <div className="flex items-center gap-2 py-2 px-3 rounded-xl bg-green-50 border-2 border-green-200">
-                  <svg className="w-4 h-4 text-green-500 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  <span className="text-sm font-bold text-green-800 font-mono truncate">{productoActivo.numeroLote}</span>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-semibold text-gray-500">
+                    Lote PT {lotePtEsSugerido && <span className="text-green-600 font-normal">(sugerido)</span>}
+                  </label>
+                  {!lotePtEsSugerido && (
+                    <button type="button" onClick={() => actualizarLotePt("")}
+                      className="text-[11px] font-semibold text-gray-400 hover:text-[#E1000F] transition-colors">
+                      Usar sugerido
+                    </button>
+                  )}
                 </div>
+                <input type="text" value={lotePtActual}
+                  onChange={(e) => actualizarLotePt(e.target.value)}
+                  className={`w-full py-2 px-3 rounded-xl border-2 text-sm font-mono focus:outline-none ${
+                    lotePtEsSugerido
+                      ? "bg-green-50 border-green-200 text-green-800 focus:border-[#E1000F]"
+                      : "bg-amber-50 border-amber-300 text-amber-900 focus:border-[#E1000F]"
+                  }`} />
               </div>
 
               {/* Observaciones */}
@@ -425,7 +464,7 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
             valor={mostrarNumpadTunel ? tiempoTunel : entradaActiva?.[campoActivo.campo as CampoNumerico] ?? ""}
             onCambio={onNumpadCambio}
             onConfirmar={onNumpadConfirmar}
-            label={mostrarNumpadTunel ? "Tiempo de Túnel (min)" : CAMPOS_NUMERICOS.find((c) => c.key === campoActivo.campo)?.label ?? ""}
+            label={mostrarNumpadTunel ? "Tiempo de Túnel (min)" : camposNumericos.find((c) => c.key === campoActivo.campo)?.label ?? ""}
             onCerrar={() => {
               // Cerrar sin OK descarta el valor: si ya había uno registrado hoy,
               // evita reenviarlo en un registro nuevo y duplicar la carga "una vez

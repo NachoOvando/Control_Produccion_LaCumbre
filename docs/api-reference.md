@@ -36,6 +36,8 @@ Puntos de control de una línea, incluyendo `schemaJson` (JSON Schema del formul
 
 **Errores:** `400 PARAM_FALTANTE` si falta `lineaId`.
 
+**Nota (desde ADR-016, 2026-07-21):** la Línea 3 devuelve **dos** puntos de control de peso ("Control Peso Baño Alfajor" y "Control Peso Tapas") con el mismo `orden` (3) y `tipoFormulario: "peso_bano"` — son mutuamente excluyentes por familia del producto activo (`PuntoControlFamilia`), nunca se muestran juntos en la grilla. No asumir `tipoFormulario` único por `orden` dentro de una línea. Ver ADR-016 y ADR-001 (diccionario de datos) en `architecture.md` para el `schemaJson` completo de cada uno.
+
 ---
 
 ### GET /api/v1/calidad/registros
@@ -81,6 +83,8 @@ Crea un registro individual. El `responsableId` se inyecta **desde la sesión de
 **Body:** `RegistroCalidadInput` (validado por Zod + JSON Schema del punto de control vía AJV).
 
 **Respuestas:** `201 { data: registro }` | `400 { error, code, details }` (validación) | `401`.
+
+**Nota (ADR-016):** para "Control Peso Tapas", el `data` esperado es `{ mediciones_tapa[12], mediciones_tapa_con_bano[12], mediciones_cobertura[12], temp_ambiente, temp_bano, escurrimiento? }` — `mediciones_cobertura` la calcula el cliente por resta apareada (`con_baño[i] − sin_bañar[i]`, helper `calcularCoberturaPorObservacion` en `src/lib/calidad/peso-cobertura.ts`) y viaja ya calculada en el POST; el servidor solo valida cota física (`schemaJson`, rango `[-10, 30]`), sin recalcularla (deuda conocida, ver ADR-016). Es un payload **distinto** al de "Control Peso Baño Alfajor" (`{ tipo_producto, mediciones[12], temp_ambiente, temp_bano, peso_tapa?, escurrimiento? }`) — antes de ADR-016 el modo "Tapitas" del frontend armaba un payload que no coincidía con ningún `schemaJson` sembrado y **todo POST fallaba** (0 registros guardados jamás para TAPAS). Ver ADR-016 en `architecture.md`.
 
 ---
 
@@ -128,13 +132,13 @@ El body **nunca** acepta `numeroLote` ni `creadoPorId` del cliente — ambos se 
 | 409 | `PRODUCTO_INACTIVO` | El producto existe pero `activo: false`. |
 | 500 | `ERROR_INTERNO` | Error no esperado al crear el lote (incluye agotar los reintentos ante colisión de `numeroLote`, ver ADR-011). |
 
-**Nota sobre `numeroLote` en la respuesta:** el formato actual (`GEN-{yyyyMMdd}-{HHmmss}`) es un placeholder temporal — ver ADR-011 en `architecture.md`. No usarlo como referencia estable para integraciones ni reportes a Arcor.
+**Nota sobre `numeroLote` en la respuesta:** el formato actual (`GEN-{yyyyMMdd}-{HHmmss}`) es un placeholder temporal, acotado hoy al alta manual — ver ADR-011/ADR-013 en `architecture.md`. No usarlo como referencia estable para integraciones ni reportes a Arcor.
 
 ---
 
 ### GET /api/v1/lineas-productivas/{lineaId}/producto-activo
 
-Devuelve el producto/lote activo de una línea **hoy** (en `America/Argentina/Cordoba`, ver `hoyPlanta()`). Reemplaza el `<select>` "Producto en producción" que antes se repetía en cada uno de los 8 formularios de captura de calidad — ver ADR-012 en `architecture.md`.
+Devuelve el producto/lote activo de una línea **hoy** (jornada productiva 6am-6am, `hoyPlanta()`/`jornadaProductiva()` en `America/Argentina/Cordoba`, ver ADR-013). Reemplaza el `<select>` "Producto en producción" que antes se repetía en cada uno de los 8 formularios de captura de calidad — ver ADR-012 en `architecture.md`.
 
 **Auth:** sesión requerida. Sin gate de rol — cualquier usuario autenticado puede leer.
 
@@ -147,9 +151,10 @@ Devuelve el producto/lote activo de una línea **hoy** (en `America/Argentina/Co
 ```json
 { "data": {
   "loteId": "uuid",
-  "numeroLote": "GEN-20260714-093015",
+  "numeroLote": "L-19/11/2026-6201-12:01-3",
   "productoId": "uuid",
   "productoNombre": "ALFAJOR NEGRO; Chocolate; LC; 40g; 24u",
+  "familiaSlug": "alfajor_negro",
   "vidaUtilMeses": 6,
   "nomenclaturaLote": "LC{ddMMyy}-{correlativo}",
   "activadoPorNombre": "Juan Pérez",
@@ -197,7 +202,7 @@ El body **nunca** acepta `lineaProductivaId` (viene del path param), `activadoPo
 | 404 | `LINEA_NO_ENCONTRADA` | El `lineaId` del path no corresponde a ninguna `LineaProductiva`. |
 | 404 | `PRODUCTO_NO_ENCONTRADO` | El `productoId` no existe. |
 | 409 | `PRODUCTO_INACTIVO` | El producto existe pero `activo: false`. |
-| 409 | `PRODUCTO_SIN_VIDA_UTIL` | El producto no tiene `vidaUtilMeses` cargado (o es `<= 0`) — no se puede calcular el vencimiento del `numeroLote` (ver ADR-013). |
+| 409 | `PRODUCTO_SIN_VIDA_UTIL` | El producto no tiene `vidaUtilMeses` cargado (o es `<= 0`) — no se puede calcular el vencimiento del `numeroLote` (ver ADR-013). **TAPAS es uno de los productos hoy sin este dato cargado — bloqueado hasta que se complete el maestro, ver ADR-016.** |
 | 429 | `ACTIVACION_MUY_FRECUENTE` | El mismo usuario activó algo en esta línea hace menos de 30 segundos (cooldown). Respuesta incluye header `Retry-After` (segundos). |
 | 429 | `LIMITE_ACTIVACIONES_EXCEDIDO` | El mismo usuario acumuló 5 o más activaciones en esta línea en los últimos 10 minutos. Respuesta incluye header `Retry-After` (segundos). |
 | 500 | `ERROR_INTERNO` | Error no esperado al activar (incluye fallas del find-or-create de `Lote`). |
@@ -214,7 +219,7 @@ Desde **ADR-015** (2026-07-21) existe un módulo de administración del maestro 
 
 - Solo hay **7 endpoints de escritura** (POST/PATCH). **No hay GET HTTP** de estas entidades: las lecturas del módulo admin y de la captura (catálogo de productos/marcas/familias, specs vigentes, bindings) se resuelven en **Server Components** vía `src/db/maestro.repository.ts` (`getProductosMaestro`, `getMarcas`, `getFamilias`, `getParametros`, `getBindings`, `getEspecificacionesVigentesDeProducto`, `getTodasEspecificacionesVigentes`, `getEspecificacionesCaptura`, `getHistorialEspecificacion`) — mismo criterio que el resto del repo, sin ruta HTTP intermedia para lectura.
 - **Todos los endpoints requieren rol `admin`** (constante `ROLES_ADMIN_MAESTRO` en `src/lib/auth/roles.ts`, compartida por las 7 rutas vía el gate común `src/lib/calidad/maestro-http.ts`). El maestro es configuración crítica de trazabilidad de exportación → solo `admin` edita; el resto de roles solo consulta (vía Server Component).
-- Los `Parametro` (catálogo cerrado de parámetros especificables) y los `PuntoControlParametro` (bindings parámetro↔campo de `data`) **no tienen endpoint de escritura**: se siembran en el seed como estructura derivada de los `schema_json`, no son dato de negocio editable por el admin.
+- Los `Parametro` (catálogo cerrado de parámetros especificables) y los `PuntoControlParametro` (bindings parámetro↔campo de `data`) **no tienen endpoint de escritura**: se siembran en el seed como estructura derivada de los `schema_json`, no son dato de negocio editable por el admin. **Desde ADR-016, el catálogo tiene 15 parámetros y 18 bindings** (se sumaron `peso_cobertura` y `temp_interna`, y sus bindings con "Control Peso Tapas"/"Control Temperatura Condensación Túnel").
 
 **Códigos de error transversales a los 7 endpoints:**
 
@@ -352,3 +357,4 @@ Crea o **versiona** una especificación de calidad para un `(producto × punto d
 | 409 | `CONFLICTO_CONCURRENCIA` | Dos versionados concurrentes de la misma spec chocaron contra el índice único parcial de "una sola vigente" (carrera benigna — el cliente reintenta/refresca). |
 
 **Nota:** no hay endpoint de baja de spec vía HTTP. El repository tiene `cerrarEspecificacion` (cierra la vigente sin abrir otra, dejando el par sin spec vigente), pero hoy no está expuesto por ningún endpoint.
+</content>

@@ -8,6 +8,8 @@ import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { RegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
+import { evaluarValor } from "@/lib/calidad/especificaciones";
+import { calcularCoberturaPorObservacion } from "@/lib/calidad/peso-cobertura";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -199,7 +201,7 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
 
   const labelNumpad: string = (() => {
     if (!campoActivo) return "";
-    if (campoActivo.origen === "medicion") return `P${campoActivo.idx + 1} (g)`;
+    if (campoActivo.origen === "medicion") return `Pico ${campoActivo.idx + 1} (g)`;
     return labelCampoExtra(campoActivo.campo);
   })();
 
@@ -287,7 +289,9 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
       if (tipoFormulario === "peso_bano") {
         if (!muestra.temp_ambiente) { setError(`Muestra ${muestra.id}: falta T° ambiente`); return; }
         if (!muestra.temp_bano) { setError(`Muestra ${muestra.id}: falta T° baño`); return; }
-        if (!muestra.escurrimiento) { setError(`Muestra ${muestra.id}: falta escurrimiento`); return; }
+        // Escurrimiento es opcional: no se mide en cada muestra en la práctica
+        // de planta (confirmado por scm-alimentos, 2026-07-21). Se envía si
+        // el operario lo cargó (ver construirData), sin bloquear el guardado.
       }
       if (tipoFormulario === "peso_relleno" && muestra.tipo === "otros" && !muestra.tipo_relleno_otro.trim()) {
         setError(`Muestra ${muestra.id}: aclará qué relleno es en el campo debajo de "Otros"`); return;
@@ -581,7 +585,7 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
                 `}
               >
                 <span className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-gray-400">P{idx + 1}</span>
+                  <span className="text-xs font-bold text-gray-400">Pico {idx + 1}</span>
                   {specMediciones && <IndicadorSpec valor={valNum} spec={specMediciones} />}
                 </span>
                 <span className={`text-base font-bold font-mono leading-tight ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>
@@ -714,52 +718,46 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
   );
 }
 
-// ─── Modo Tapitas ────────────────────────────────────────────────────────────
+// ─── Modo Tapas (2026-07-21: corrige el modo "Tapitas" anterior — su schema
+// nunca coincidió con el payload real, 0 registros guardados jamás; ver ADR-015) ──
 
-type FilaTapita = "tapa" | "tapa_con_bano" | "bano";
+type FilaTapa = "tapa" | "tapa_con_bano";
 
-type MuestraTapita = {
+type MuestraTapa = {
   id: number;
   hora: string;
   notas: string;
   mediciones_tapa: string[];
   mediciones_tapa_con_bano: string[];
-  mediciones_bano: string[];
   temp_ambiente: string;
   temp_bano: string;
   escurrimiento: string;
 };
 
-type CampoTapita =
-  | { origen: "medicion"; fila: FilaTapita; idx: number }
+type CampoTapa =
+  | { origen: "medicion"; fila: FilaTapa; idx: number }
   | { origen: "extra"; campo: "temp_ambiente" | "temp_bano" | "escurrimiento" };
 
-const FILAS_TAPITA: { key: FilaTapita; label: string; color: string; colorActivo: string; colorLleno: string }[] = [
-  { key: "tapa", label: "TAPA", color: "bg-gray-50 border-gray-200", colorActivo: "border-[#E1000F] bg-red-50", colorLleno: "border-blue-300 bg-blue-50" },
+const FILAS_TAPA: { key: FilaTapa; label: string; color: string; colorActivo: string; colorLleno: string }[] = [
+  { key: "tapa", label: "TAPA (sin bañar)", color: "bg-gray-50 border-gray-200", colorActivo: "border-[#E1000F] bg-red-50", colorLleno: "border-blue-300 bg-blue-50" },
   { key: "tapa_con_bano", label: "TAPA C/BAÑO", color: "bg-gray-50 border-gray-200", colorActivo: "border-[#E1000F] bg-red-50", colorLleno: "border-indigo-300 bg-indigo-50" },
-  { key: "bano", label: "BAÑO", color: "bg-gray-50 border-gray-200", colorActivo: "border-[#E1000F] bg-red-50", colorLleno: "border-amber-300 bg-amber-50" },
 ];
 
-function filaKey(fila: FilaTapita, m: MuestraTapita): string[] {
-  if (fila === "tapa") return m.mediciones_tapa;
-  if (fila === "tapa_con_bano") return m.mediciones_tapa_con_bano;
-  return m.mediciones_bano;
+function filaTapaKey(fila: FilaTapa, m: MuestraTapa): string[] {
+  return fila === "tapa" ? m.mediciones_tapa : m.mediciones_tapa_con_bano;
 }
 
-function setFilaKey(fila: FilaTapita, m: MuestraTapita, vals: string[]): Partial<MuestraTapita> {
-  if (fila === "tapa") return { mediciones_tapa: vals };
-  if (fila === "tapa_con_bano") return { mediciones_tapa_con_bano: vals };
-  return { mediciones_bano: vals };
+function setFilaTapaKey(fila: FilaTapa, m: MuestraTapa, vals: string[]): Partial<MuestraTapa> {
+  return fila === "tapa" ? { mediciones_tapa: vals } : { mediciones_tapa_con_bano: vals };
 }
 
-function crearMuestraTapita(id: number): MuestraTapita {
+function crearMuestraTapa(id: number): MuestraTapa {
   return {
     id,
     hora: horaPlanta(),
     notas: "",
     mediciones_tapa: Array(12).fill(""),
     mediciones_tapa_con_bano: Array(12).fill(""),
-    mediciones_bano: Array(12).fill(""),
     temp_ambiente: "",
     temp_bano: "",
     escurrimiento: "",
@@ -773,9 +771,9 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
   const { data: session } = useSession();
 
   const loteId = productoActivo.loteId;
-  const [muestras, setMuestras] = useState<MuestraTapita[]>([crearMuestraTapita(1)]);
+  const [muestras, setMuestras] = useState<MuestraTapa[]>([crearMuestraTapa(1)]);
   const [muestraActivaId, setMuestraActivaId] = useState(1);
-  const [campoActivo, setCampoActivo] = useState<CampoTapita | null>(null);
+  const [campoActivo, setCampoActivo] = useState<CampoTapa | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exito, setExito] = useState(false);
@@ -783,29 +781,71 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
   const muestraActiva = muestras.find((m) => m.id === muestraActivaId)!;
   const muestraActivaIdx = muestras.findIndex((m) => m.id === muestraActivaId);
 
-  const statsPorFila = useMemo(() => {
-    return {
-      tapa: calcularStats(muestraActiva.mediciones_tapa),
-      tapa_con_bano: calcularStats(muestraActiva.mediciones_tapa_con_bano),
-      bano: calcularStats(muestraActiva.mediciones_bano),
-    };
-  }, [muestraActiva.mediciones_tapa, muestraActiva.mediciones_tapa_con_bano, muestraActiva.mediciones_bano]);
+  // Cobertura calculada en vivo por resta apareada (con baño − sin bañar), pico
+  // a pico — NO se tipea a mano (corrige el diseño anterior con 3 filas).
+  const coberturaCalculada = useMemo(
+    () => calcularCoberturaPorObservacion(
+      muestraActiva.mediciones_tapa.map((v) => parseFloat(v)),
+      muestraActiva.mediciones_tapa_con_bano.map((v) => parseFloat(v))
+    ),
+    [muestraActiva.mediciones_tapa, muestraActiva.mediciones_tapa_con_bano]
+  );
 
-  const updateMuestra = useCallback((patch: Partial<MuestraTapita>) => {
+  const statsCobertura = useMemo(() => {
+    const validas = coberturaCalculada.filter((v) => Number.isFinite(v));
+    if (validas.length === 0) return null;
+    const n = validas.length;
+    const promedio = validas.reduce((a, b) => a + b, 0) / n;
+    const min = Math.min(...validas);
+    const max = Math.max(...validas);
+    const varianza = validas.reduce((acc, v) => acc + Math.pow(v - promedio, 2), 0) / n;
+    return { promedio, min, max, de: Math.sqrt(varianza), n };
+  }, [coberturaCalculada]);
+
+  const statsPorFila = useMemo(() => ({
+    tapa: calcularStats(muestraActiva.mediciones_tapa),
+    tapa_con_bano: calcularStats(muestraActiva.mediciones_tapa_con_bano),
+  }), [muestraActiva.mediciones_tapa, muestraActiva.mediciones_tapa_con_bano]);
+
+  // Specs de calidad, si el producto las tiene cargadas para este punto de control
+  const specTapa = specDeCampo(productoActivo.especificaciones, "mediciones_tapa");
+  const specCobertura = specDeCampo(productoActivo.especificaciones, "mediciones_cobertura");
+
+  // Conteo de valores fuera de especificación en la muestra activa (tapa + cobertura)
+  const fueraDeSpecCount = useMemo(() => {
+    let n = 0;
+    if (specTapa) {
+      for (const v of muestraActiva.mediciones_tapa) {
+        const num = v !== "" ? parseFloat(v) : NaN;
+        const estado = Number.isFinite(num) ? evaluarValor(num, specTapa) : "sin_spec";
+        if (estado === "fuera_aceptacion" || estado === "fuera_critico") n++;
+      }
+    }
+    if (specCobertura) {
+      for (const v of coberturaCalculada) {
+        if (!Number.isFinite(v)) continue;
+        const estado = evaluarValor(v, specCobertura);
+        if (estado === "fuera_aceptacion" || estado === "fuera_critico") n++;
+      }
+    }
+    return n;
+  }, [muestraActiva.mediciones_tapa, coberturaCalculada, specTapa, specCobertura]);
+
+  const updateMuestra = useCallback((patch: Partial<MuestraTapa>) => {
     setMuestras((prev) => prev.map((m) => m.id === muestraActivaId ? { ...m, ...patch } : m));
   }, [muestraActivaId]);
 
   const valorNumpad: string = (() => {
     if (!campoActivo) return "";
-    if (campoActivo.origen === "medicion") return filaKey(campoActivo.fila, muestraActiva)[campoActivo.idx];
+    if (campoActivo.origen === "medicion") return filaTapaKey(campoActivo.fila, muestraActiva)[campoActivo.idx];
     return muestraActiva[campoActivo.campo];
   })();
 
   const labelNumpad: string = (() => {
     if (!campoActivo) return "";
     if (campoActivo.origen === "medicion") {
-      const filaLabel = FILAS_TAPITA.find((f) => f.key === campoActivo.fila)?.label ?? "";
-      return `${filaLabel} — P${campoActivo.idx + 1} (g)`;
+      const filaLabel = FILAS_TAPA.find((f) => f.key === campoActivo.fila)?.label ?? "";
+      return `${filaLabel} — Pico ${campoActivo.idx + 1} (g)`;
     }
     return labelCampoExtra(campoActivo.campo);
   })();
@@ -813,15 +853,16 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
   const onNumpadCambio = useCallback((v: string) => {
     if (!campoActivo) return;
     if (campoActivo.origen === "medicion") {
-      const vals = [...filaKey(campoActivo.fila, muestraActiva)];
+      const vals = [...filaTapaKey(campoActivo.fila, muestraActiva)];
       vals[campoActivo.idx] = v;
-      updateMuestra(setFilaKey(campoActivo.fila, muestraActiva, vals));
+      updateMuestra(setFilaTapaKey(campoActivo.fila, muestraActiva, vals));
     } else {
       updateMuestra({ [campoActivo.campo]: v });
     }
   }, [campoActivo, muestraActiva, updateMuestra]);
 
-  // Auto-avance: TAPA P1→P12 → TAPA C/BAÑO P1→P12 → BAÑO P1→P12 → cerrar
+  // Auto-avance: TAPA Pico1→12 → TAPA C/BAÑO Pico1→12 → cerrar (2 filas — la
+  // cobertura se deriva, no se tipea).
   const onNumpadConfirmar = useCallback(() => {
     if (!campoActivo) return;
     if (campoActivo.origen === "extra") { setCampoActivo(null); return; }
@@ -831,10 +872,9 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
       setCampoActivo({ origen: "medicion", fila: campoActivo.fila, idx: siguiente });
       return;
     }
-    // Avanzar a siguiente fila
-    const filaIdx = FILAS_TAPITA.findIndex((f) => f.key === campoActivo.fila);
-    if (filaIdx < FILAS_TAPITA.length - 1) {
-      setCampoActivo({ origen: "medicion", fila: FILAS_TAPITA[filaIdx + 1].key, idx: 0 });
+    const filaIdx = FILAS_TAPA.findIndex((f) => f.key === campoActivo.fila);
+    if (filaIdx < FILAS_TAPA.length - 1) {
+      setCampoActivo({ origen: "medicion", fila: FILAS_TAPA[filaIdx + 1].key, idx: 0 });
     } else {
       setCampoActivo(null);
     }
@@ -842,7 +882,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
 
   const agregarMuestra = () => {
     const nuevoId = Math.max(...muestras.map((m) => m.id)) + 1;
-    setMuestras((prev) => [...prev, crearMuestraTapita(nuevoId)]);
+    setMuestras((prev) => [...prev, crearMuestraTapa(nuevoId)]);
     setMuestraActivaId(nuevoId);
     setCampoActivo(null);
   };
@@ -857,30 +897,37 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
 
   const guardar = async () => {
     for (const m of muestras) {
-      for (const fila of FILAS_TAPITA) {
-        const vacias = filaKey(fila.key, m).filter((v) => v === "").length;
+      for (const fila of FILAS_TAPA) {
+        const vacias = filaTapaKey(fila.key, m).filter((v) => v === "").length;
         if (vacias > 0) { setError(`M${m.id} — ${fila.label}: faltan ${vacias} medición(es)`); return; }
       }
       if (!m.temp_ambiente) { setError(`M${m.id}: falta T° ambiente`); return; }
       if (!m.temp_bano) { setError(`M${m.id}: falta T° baño`); return; }
-      if (!m.escurrimiento) { setError(`M${m.id}: falta escurrimiento`); return; }
+      // Escurrimiento opcional (confirmado por scm-alimentos, 2026-07-21).
     }
 
     const hoy = hoyPlanta();
-    const registros = muestras.map((m, idx) => ({
-      puntoControlId, loteId, lineaProductivaId,
-      fecha: hoy, hora: m.hora + ":00", nroMuestra: idx + 1,
-      notas: m.notas || undefined,
-      data: {
-        familia: "tapitas",
-        mediciones_tapa: m.mediciones_tapa.map(parseFloat),
-        mediciones_tapa_con_bano: m.mediciones_tapa_con_bano.map(parseFloat),
-        mediciones_bano: m.mediciones_bano.map(parseFloat),
+    const registros = muestras.map((m, idx) => {
+      const tapa = m.mediciones_tapa.map((v) => parseFloat(v));
+      const tapaConBano = m.mediciones_tapa_con_bano.map((v) => parseFloat(v));
+      // Payload alineado 1:1 con schemaPesoTapas (additionalProperties: false) —
+      // ver prisma/seed.ts. Nunca mandar campos fuera de ese schema (esto es
+      // justo lo que rompía el guardado en el diseño anterior).
+      const data: Record<string, unknown> = {
+        mediciones_tapa: tapa,
+        mediciones_tapa_con_bano: tapaConBano,
+        mediciones_cobertura: calcularCoberturaPorObservacion(tapa, tapaConBano),
         temp_ambiente: parseFloat(m.temp_ambiente),
         temp_bano: parseFloat(m.temp_bano),
-        escurrimiento: parseFloat(m.escurrimiento),
-      },
-    }));
+      };
+      if (m.escurrimiento !== "") data.escurrimiento = parseFloat(m.escurrimiento);
+      return {
+        puntoControlId, loteId, lineaProductivaId,
+        fecha: hoy, hora: m.hora + ":00", nroMuestra: idx + 1,
+        notas: m.notas || undefined,
+        data,
+      };
+    });
 
     setEnviando(true); setError(null); setCampoActivo(null);
     try {
@@ -910,21 +957,21 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
     </div>
   );
 
-  const completadasTotal = FILAS_TAPITA.reduce(
-    (acc, f) => acc + filaKey(f.key, muestraActiva).filter((v) => v !== "").length, 0
+  const completadasTotal = FILAS_TAPA.reduce(
+    (acc, f) => acc + filaTapaKey(f.key, muestraActiva).filter((v) => v !== "").length, 0
   );
 
   return (
     <div className="space-y-4" onClick={() => { if (campoActivo) setCampoActivo(null); }}>
 
-      {/* Badge Tapitas */}
+      {/* Badge Tapas */}
       <div className="bg-indigo-50 border border-indigo-200 rounded-2xl px-4 py-3 flex items-center gap-3">
         <div className="w-8 h-8 rounded-lg bg-indigo-100 flex items-center justify-center flex-shrink-0">
           <span className="text-indigo-700 text-sm font-bold">T</span>
         </div>
         <div>
-          <p className="text-sm font-bold text-indigo-800">Control de Peso Baño — Tapitas</p>
-          <p className="text-xs text-indigo-600">3 mediciones por muestra: TAPA · TAPA C/BAÑO · BAÑO</p>
+          <p className="text-sm font-bold text-indigo-800">Control de Peso Tapas</p>
+          <p className="text-xs text-indigo-600">2 mediciones por muestra (sin bañar / con baño) — la cobertura se calcula sola</p>
         </div>
       </div>
 
@@ -935,13 +982,13 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
 
       {/* Tabs de muestras */}
       <div className="bg-[#f0f0f0] rounded-xl p-3 flex items-center gap-2 overflow-x-auto" onClick={(e) => e.stopPropagation()}>
-        {muestras.map((m, idx) => {
-          const completas = FILAS_TAPITA.reduce((acc, f) => acc + filaKey(f.key, m).filter((v) => v !== "").length, 0);
+        {muestras.map((m) => {
+          const completas = FILAS_TAPA.reduce((acc, f) => acc + filaTapaKey(f.key, m).filter((v) => v !== "").length, 0);
           return (
             <div key={m.id} className="relative flex-shrink-0">
               <button type="button" onClick={() => { setMuestraActivaId(m.id); setCampoActivo(null); }}
                 className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all flex items-center gap-1.5 ${m.id === muestraActivaId ? "bg-white text-[#E1000F] shadow border border-gray-200" : "text-gray-600 hover:bg-white/60"}`}>
-                M{m.id} {completas === 36 && <span className="text-green-500 text-xs">✓</span>}
+                M{m.id} {completas === 24 && <span className="text-green-500 text-xs">✓</span>}
               </button>
               {muestras.length > 1 && m.id === muestraActivaId && (
                 <button type="button" onClick={(e) => { e.stopPropagation(); eliminarMuestraActiva(); }}
@@ -976,11 +1023,14 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Condiciones del baño</p>
         <div className="grid grid-cols-3 gap-2">
           {(["temp_ambiente", "temp_bano", "escurrimiento"] as const).map((campo) => {
-            const activo = campoActivo?.origen === "extra" && (campoActivo as { origen: "extra"; campo: string }).campo === campo;
+            const activo = campoActivo?.origen === "extra" && campoActivo.campo === campo;
             return (
               <button key={campo} type="button" onClick={() => setCampoActivo({ origen: "extra", campo })}
                 className={`rounded-xl border-2 p-3 text-left transition-all active:scale-95 ${activo ? "border-[#E1000F] bg-red-50" : muestraActiva[campo] !== "" ? "border-green-300 bg-green-50" : "border-gray-200 bg-gray-50"}`}>
-                <p className="text-xs text-gray-500 mb-0.5">{labelCampoExtra(campo)}</p>
+                <p className="text-xs text-gray-500 mb-0.5">
+                  {labelCampoExtra(campo)}
+                  {campo === "escurrimiento" && <span className="text-gray-400"> (opcional)</span>}
+                </p>
                 <p className={`text-lg font-bold font-mono ${muestraActiva[campo] ? "text-gray-900" : "text-gray-300"}`}>{muestraActiva[campo] || "—"}</p>
               </button>
             );
@@ -988,29 +1038,35 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
         </div>
       </div>
 
-      {/* Grillas de mediciones — 3 filas */}
-      {FILAS_TAPITA.map((fila) => {
-        const vals = filaKey(fila.key, muestraActiva);
+      {/* Grillas de mediciones — 2 filas capturadas */}
+      {FILAS_TAPA.map((fila) => {
+        const vals = filaTapaKey(fila.key, muestraActiva);
         const stats = statsPorFila[fila.key];
         const completadas = vals.filter((v) => v !== "").length;
+        const spec = fila.key === "tapa" ? specTapa : null;
 
         return (
           <div key={fila.key} className="bg-white rounded-2xl p-4 border border-gray-100" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-bold text-gray-700">{fila.label}</h2>
+              <h2 className="text-sm font-bold text-gray-700">
+                {fila.label}
+                {spec && <span className="ml-2"><RangoObjetivo spec={spec} /></span>}
+              </h2>
               <span className="text-xs text-gray-400 font-medium">{completadas}/12</span>
             </div>
             <div className="grid grid-cols-4 gap-2">
               {vals.map((val, idx) => {
-                const isActivo = campoActivo?.origen === "medicion" &&
-                  (campoActivo as { origen: "medicion"; fila: FilaTapita; idx: number }).fila === fila.key &&
-                  (campoActivo as { origen: "medicion"; fila: FilaTapita; idx: number }).idx === idx;
+                const isActivo = campoActivo?.origen === "medicion" && campoActivo.fila === fila.key && campoActivo.idx === idx;
                 const tieneValor = val !== "";
+                const valNum = tieneValor ? parseFloat(val) : null;
                 return (
                   <button key={idx} type="button"
                     onClick={() => setCampoActivo({ origen: "medicion", fila: fila.key, idx })}
                     className={`rounded-xl border-2 p-2 text-left transition-all active:scale-95 aspect-square flex flex-col justify-between ${isActivo ? fila.colorActivo + " shadow-md" : tieneValor ? fila.colorLleno : fila.color + " hover:bg-gray-100"}`}>
-                    <span className="text-xs font-bold text-gray-400">P{idx + 1}</span>
+                    <span className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-gray-400">Pico {idx + 1}</span>
+                      {spec && <IndicadorSpec valor={valNum} spec={spec} />}
+                    </span>
                     <span className={`text-base font-bold font-mono leading-tight ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>{val || "—"}</span>
                   </button>
                 );
@@ -1034,6 +1090,56 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
           </div>
         );
       })}
+
+      {/* Cobertura — calculada, NO editable (resta apareada pico a pico) */}
+      <div className="bg-amber-50/40 rounded-2xl p-4 border-2 border-amber-200" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold text-amber-800">
+            COBERTURA (con baño − sin bañar)
+            {specCobertura && <span className="ml-2"><RangoObjetivo spec={specCobertura} /></span>}
+          </h2>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          {coberturaCalculada.map((val, idx) => {
+            const tieneValor = Number.isFinite(val);
+            return (
+              <div key={idx} className={`rounded-xl border-2 p-2 aspect-square flex flex-col justify-between ${tieneValor ? "border-amber-300 bg-white" : "border-gray-200 bg-gray-50"}`}>
+                <span className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-400">Pico {idx + 1}</span>
+                  {specCobertura && tieneValor && <IndicadorSpec valor={val} spec={specCobertura} />}
+                </span>
+                <span className={`text-base font-bold font-mono leading-tight ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>
+                  {tieneValor ? val.toFixed(1) : "—"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        {statsCobertura && (
+          <div className="grid grid-cols-4 gap-2 mt-3 text-center">
+            {[
+              { label: "Prom.", valor: statsCobertura.promedio.toFixed(1) },
+              { label: "Mín.", valor: statsCobertura.min.toFixed(1) },
+              { label: "Máx.", valor: statsCobertura.max.toFixed(1) },
+              { label: "DE ±", valor: statsCobertura.de.toFixed(2) },
+            ].map(({ label, valor }) => (
+              <div key={label} className="bg-white rounded-xl p-2 border border-amber-100">
+                <p className="text-xs text-gray-500">{label}</p>
+                <p className="text-sm font-bold font-mono text-gray-800">{valor}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Resumen de fuera de especificación al completar la muestra */}
+      {(specTapa || specCobertura) && completadasTotal === 24 && (
+        <div className={`rounded-2xl p-3 text-sm font-semibold text-center ${fueraDeSpecCount > 0 ? "bg-red-50 border border-red-200 text-red-700" : "bg-green-50 border border-green-200 text-green-700"}`}>
+          {fueraDeSpecCount > 0
+            ? `⚠ ${fueraDeSpecCount} valor${fueraDeSpecCount !== 1 ? "es" : ""} fuera de especificación en esta muestra`
+            : "✓ Todos los valores dentro de especificación"}
+        </div>
+      )}
 
       {/* Notas */}
       <div className="bg-white rounded-2xl p-4 border border-gray-100" onClick={(e) => e.stopPropagation()}>
@@ -1071,7 +1177,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
                   </svg>
                   Guardando...
                 </span>
-              ) : `Guardar — ${completadasTotal}/36 mediciones · ${muestras.length} muestra${muestras.length !== 1 ? "s" : ""}`}
+              ) : `Guardar — ${completadasTotal}/24 mediciones · ${muestras.length} muestra${muestras.length !== 1 ? "s" : ""}`}
             </button>
           </div>
         </div>
