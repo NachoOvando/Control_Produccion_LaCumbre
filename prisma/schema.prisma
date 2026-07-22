@@ -58,22 +58,24 @@ model Usuario {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  registros          RegistroCalidad[]
-  registrosEliminados RegistroCalidad[] @relation("RegistroEliminado")
-  auditorias         AuditoriaRegistro[]
-  loteEstadoLogs     LoteEstadoLog[]
-  lotesCreados       Lote[] @relation("LoteCreadoPor")
-  lineasActivadas    LineaProduccionEstado[]
-  activacionesLinea  LineaActivacionLog[]
-  accounts           Account[]
-  sessions           Session[]
+  registros               RegistroCalidad[]
+  registrosEliminados     RegistroCalidad[]        @relation("RegistroEliminado")
+  auditorias              AuditoriaRegistro[]
+  loteEstadoLogs          LoteEstadoLog[]
+  lotesCreados            Lote[]                   @relation("LoteCreadoPor")
+  lineasActivadas         LineaProduccionEstado[]
+  activacionesLinea       LineaActivacionLog[]
+  accounts                Account[]
+  sessions                Session[]
+  especificacionesCreadas EspecificacionProducto[] @relation("EspecCreadaPor")
+  auditoriasMaestro       AuditoriaMaestro[]
 
   @@map("usuarios")
 }
 
 model Account {
   id                String  @id @default(uuid()) @db.Uuid
-  userId            String  @db.Uuid @map("user_id")
+  userId            String  @map("user_id") @db.Uuid
   type              String
   provider          String
   providerAccountId String  @map("provider_account_id")
@@ -94,7 +96,7 @@ model Account {
 model Session {
   id           String   @id @default(uuid()) @db.Uuid
   sessionToken String   @unique @map("session_token")
-  userId       String   @db.Uuid @map("user_id")
+  userId       String   @map("user_id") @db.Uuid
   expires      DateTime
   user         Usuario  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -110,9 +112,9 @@ model Session {
 
 model Turno {
   id         String   @id @default(uuid()) @db.Uuid
-  nombre     String   @unique        // "Mañana", "Tarde", "Noche"
+  nombre     String   @unique // "Mañana", "Tarde", "Noche"
   horaInicio String   @map("hora_inicio") // "06:00" — 24h format HH:MM
-  horaFin    String   @map("hora_fin")    // "14:00" — puede cruzar medianoche (ej. Noche: 22:00-06:00)
+  horaFin    String   @map("hora_fin") // "14:00" — puede cruzar medianoche (ej. Noche: 22:00-06:00)
   activo     Boolean  @default(true)
   createdAt  DateTime @default(now()) @map("created_at")
 
@@ -161,8 +163,8 @@ model Familia {
 
 // Qué familias aplican a cada punto de control (reemplaza el hardcodeo del frontend).
 model PuntoControlFamilia {
-  puntoControlId String @db.Uuid @map("punto_control_id")
-  familiaId      String @db.Uuid @map("familia_id")
+  puntoControlId String @map("punto_control_id") @db.Uuid
+  familiaId      String @map("familia_id") @db.Uuid
 
   puntoControl PuntoControl @relation(fields: [puntoControlId], references: [id], onDelete: Cascade)
   familia      Familia      @relation(fields: [familiaId], references: [id], onDelete: Cascade)
@@ -184,9 +186,9 @@ model Producto {
   // Nullable: 34/104 productos del maestro no tienen código. UNIQUE admite múltiples NULL.
   sku                String?            @unique
   nombre             String             @unique
-  familiaId          String             @db.Uuid @map("familia_id")
-  marcaId            String             @db.Uuid @map("marca_id")
-  lineaProductivaId  String?            @db.Uuid @map("linea_productiva_id")
+  familiaId          String             @map("familia_id") @db.Uuid
+  marcaId            String             @map("marca_id") @db.Uuid
+  lineaProductivaId  String?            @map("linea_productiva_id") @db.Uuid
   gusto              String?
   pesoGramos         Decimal?           @map("peso_gramos") @db.Decimal(8, 2)
   // Decimal: los semielaborados traen valores no enteros (TAPAS = 751,87)
@@ -207,10 +209,11 @@ model Producto {
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
 
-  familia         Familia          @relation(fields: [familiaId], references: [id])
-  marca           Marca            @relation(fields: [marcaId], references: [id])
-  lineaProductiva LineaProductiva? @relation(fields: [lineaProductivaId], references: [id])
-  lotes           Lote[]
+  familia          Familia                  @relation(fields: [familiaId], references: [id])
+  marca            Marca                    @relation(fields: [marcaId], references: [id])
+  lineaProductiva  LineaProductiva?         @relation(fields: [lineaProductivaId], references: [id])
+  lotes            Lote[]
+  especificaciones EspecificacionProducto[]
 
   @@index([familiaId])
   @@index([marcaId])
@@ -229,37 +232,37 @@ enum EstadoLote {
 // Lote tiene FK opcional a OrdenProduccion para cuando se construya el módulo de Producción.
 // Hoy puede existir un lote sin orden (captura directa desde planta).
 model Lote {
-  id               String          @id @default(uuid()) @db.Uuid
-  numeroLote       String          @unique @map("numero_lote")
-  productoId       String          @db.Uuid @map("producto_id")
-  ordenProduccionId String?        @db.Uuid @map("orden_produccion_id") // FK a OP, opcional
+  id                String     @id @default(uuid()) @db.Uuid
+  numeroLote        String     @unique @map("numero_lote")
+  productoId        String     @map("producto_id") @db.Uuid
+  ordenProduccionId String?    @map("orden_produccion_id") @db.Uuid // FK a OP, opcional
   // Nullable: lotes históricos sin línea y futuros lotes creados desde una OP
   // pueden no tenerla seteada de entrada. Habilita el find-or-create de
   // "producto activo por línea" (ver LineaProduccionEstado) vía el unique de abajo.
-  lineaProductivaId String?        @db.Uuid @map("linea_productiva_id")
-  fechaProduccion  DateTime        @map("fecha_produccion") @db.Date
-  estado           EstadoLote      @default(en_produccion)
-  notas            String?
-  createdAt        DateTime        @default(now()) @map("created_at")
+  lineaProductivaId String?    @map("linea_productiva_id") @db.Uuid
+  fechaProduccion   DateTime   @map("fecha_produccion") @db.Date
+  estado            EstadoLote @default(en_produccion)
+  notas             String?
+  createdAt         DateTime   @default(now()) @map("created_at")
   // Nullable: lotes generados automáticamente (futura OP) o importados en bulk
   // no necesariamente tienen un usuario humano detrás. Ver ADR de auditoría de Lote.
-  creadoPorId      String?         @db.Uuid @map("creado_por_id")
+  creadoPorId       String?    @map("creado_por_id") @db.Uuid
 
-  producto        Producto           @relation(fields: [productoId], references: [id])
-  ordenProduccion OrdenProduccion?   @relation(fields: [ordenProduccionId], references: [id])
-  lineaProductiva LineaProductiva?   @relation(fields: [lineaProductivaId], references: [id])
-  creadoPor       Usuario?           @relation("LoteCreadoPor", fields: [creadoPorId], references: [id], onDelete: SetNull)
+  producto        Producto               @relation(fields: [productoId], references: [id])
+  ordenProduccion OrdenProduccion?       @relation(fields: [ordenProduccionId], references: [id])
+  lineaProductiva LineaProductiva?       @relation(fields: [lineaProductivaId], references: [id])
+  creadoPor       Usuario?               @relation("LoteCreadoPor", fields: [creadoPorId], references: [id], onDelete: SetNull)
   registros       RegistroCalidad[]
   estadoLogs      LoteEstadoLog[]
   estadoDeLinea   LineaProduccionEstado?
   activaciones    LineaActivacionLog[]
 
-  @@index([productoId])
-  // Cubre el WHERE + ORDER BY de getLotesActivos (tabla de crecimiento diario)
-  @@index([estado, fechaProduccion])
   // Find-or-create de "producto activo por línea": NULL no colisiona contra NULL
   // en Postgres, así que lotes históricos sin línea no rompen esta constraint.
   @@unique([productoId, lineaProductivaId, fechaProduccion])
+  @@index([productoId])
+  // Cubre el WHERE + ORDER BY de getLotesActivos (tabla de crecimiento diario)
+  @@index([estado, fechaProduccion])
   @@index([creadoPorId])
   @@map("lotes")
 }
@@ -269,9 +272,9 @@ model Lote {
 // formularios de captura en vez del viejo <select> por-formulario. El historial
 // de cambios vive aparte en LineaActivacionLog (esta tabla no es append-only).
 model LineaProduccionEstado {
-  lineaProductivaId String   @id @db.Uuid @map("linea_productiva_id")
-  loteActivoId      String   @unique @db.Uuid @map("lote_activo_id")
-  activadoPorId     String   @db.Uuid @map("activado_por_id")
+  lineaProductivaId String   @id @map("linea_productiva_id") @db.Uuid
+  loteActivoId      String   @unique @map("lote_activo_id") @db.Uuid
+  activadoPorId     String   @map("activado_por_id") @db.Uuid
   activadoEn        DateTime @map("activado_en")
 
   lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id])
@@ -286,9 +289,9 @@ model LineaProduccionEstado {
 // se sobreescribe — mismo criterio que AuditoriaRegistro/LoteEstadoLog.
 model LineaActivacionLog {
   id                String   @id @default(uuid()) @db.Uuid
-  lineaProductivaId String   @db.Uuid @map("linea_productiva_id")
-  loteId            String   @db.Uuid @map("lote_id")
-  usuarioId         String   @db.Uuid @map("usuario_id")
+  lineaProductivaId String   @map("linea_productiva_id") @db.Uuid
+  loteId            String   @map("lote_id") @db.Uuid
+  usuarioId         String   @map("usuario_id") @db.Uuid
   createdAt         DateTime @default(now()) @map("created_at")
 
   lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id])
@@ -373,9 +376,9 @@ model LineaProductiva {
 // siguienteValorSecuencia en src/db/calidad.repository.ts), ejecutado dentro
 // de la misma transacción que persiste los registros.
 model SecuenciaDiaria {
-  lineaProductivaId String   @db.Uuid @map("linea_productiva_id")
+  lineaProductivaId String   @map("linea_productiva_id") @db.Uuid
   fecha             DateTime @db.Date
-  tipo              String   // hoy: puntoControlId
+  tipo              String // hoy: puntoControlId
   ultimoValor       Int      @default(0) @map("ultimo_valor")
 
   lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id])
@@ -385,12 +388,12 @@ model SecuenciaDiaria {
 }
 
 model Ubicacion {
-  id       String     @id @default(uuid()) @db.Uuid
-  codigo   String     @unique
+  id       String  @id @default(uuid()) @db.Uuid
+  codigo   String  @unique
   nombre   String
   tipo     String
-  parentId String?    @db.Uuid @map("parent_id")
-  activa   Boolean    @default(true)
+  parentId String? @map("parent_id") @db.Uuid
+  activa   Boolean @default(true)
 
   parent Ubicacion?  @relation("UbicacionJerarquia", fields: [parentId], references: [id])
   hijos  Ubicacion[] @relation("UbicacionJerarquia")
@@ -430,16 +433,18 @@ model PuntoControl {
   activo         Boolean        @default(true)
   createdAt      DateTime       @default(now()) @map("created_at")
 
-  lineas    PuntoControlLinea[]
-  familias  PuntoControlFamilia[]
-  registros RegistroCalidad[]
+  lineas           PuntoControlLinea[]
+  familias         PuntoControlFamilia[]
+  registros        RegistroCalidad[]
+  parametros       PuntoControlParametro[]
+  especificaciones EspecificacionProducto[]
 
   @@map("puntos_control")
 }
 
 model PuntoControlLinea {
-  puntoControlId    String @db.Uuid @map("punto_control_id")
-  lineaProductivaId String @db.Uuid @map("linea_productiva_id")
+  puntoControlId    String @map("punto_control_id") @db.Uuid
+  lineaProductivaId String @map("linea_productiva_id") @db.Uuid
   orden             Int    @default(0)
 
   puntoControl    PuntoControl    @relation(fields: [puntoControlId], references: [id], onDelete: Cascade)
@@ -468,11 +473,11 @@ enum FuenteOrigen {
 
 model RegistroCalidad {
   id                String       @id @default(uuid()) @db.Uuid
-  puntoControlId    String       @db.Uuid @map("punto_control_id")
-  loteId            String       @db.Uuid @map("lote_id")
-  lineaProductivaId String       @db.Uuid @map("linea_productiva_id")
-  responsableId     String       @db.Uuid @map("responsable_id")
-  turnoId           String?      @db.Uuid @map("turno_id")
+  puntoControlId    String       @map("punto_control_id") @db.Uuid
+  loteId            String       @map("lote_id") @db.Uuid
+  lineaProductivaId String       @map("linea_productiva_id") @db.Uuid
+  responsableId     String       @map("responsable_id") @db.Uuid
+  turnoId           String?      @map("turno_id") @db.Uuid
   fuenteOrigen      FuenteOrigen @default(tablet) @map("fuente_origen")
   fecha             DateTime     @db.Date
   hora              DateTime     @db.Time(0)
@@ -483,14 +488,14 @@ model RegistroCalidad {
   createdAt         DateTime     @default(now()) @map("created_at")
   // Soft-delete: nunca se elimina físicamente un registro de calidad (HACCP)
   deletedAt         DateTime?    @map("deleted_at")
-  deletedById       String?      @db.Uuid @map("deleted_by_id")
+  deletedById       String?      @map("deleted_by_id") @db.Uuid
 
-  puntoControl    PuntoControl    @relation(fields: [puntoControlId], references: [id])
-  lote            Lote            @relation(fields: [loteId], references: [id])
-  lineaProductiva LineaProductiva @relation(fields: [lineaProductivaId], references: [id])
-  responsable     Usuario         @relation(fields: [responsableId], references: [id])
-  turno           Turno?          @relation(fields: [turnoId], references: [id])
-  deletedBy       Usuario?        @relation("RegistroEliminado", fields: [deletedById], references: [id])
+  puntoControl    PuntoControl        @relation(fields: [puntoControlId], references: [id])
+  lote            Lote                @relation(fields: [loteId], references: [id])
+  lineaProductiva LineaProductiva     @relation(fields: [lineaProductivaId], references: [id])
+  responsable     Usuario             @relation(fields: [responsableId], references: [id])
+  turno           Turno?              @relation(fields: [turnoId], references: [id])
+  deletedBy       Usuario?            @relation("RegistroEliminado", fields: [deletedById], references: [id])
   auditoria       AuditoriaRegistro[]
 
   // NOTA (auditoría 2026-07-20, Lote 2): con filaProd nullable, Postgres trata
@@ -525,20 +530,20 @@ model RegistroCalidad {
 enum AccionAuditoria {
   crear
   modificar
-  eliminar  // soft-delete
+  eliminar // soft-delete
   restaurar
 }
 
 model AuditoriaRegistro {
-  id               String           @id @default(uuid()) @db.Uuid
-  registroCalidadId String          @db.Uuid @map("registro_calidad_id")
-  accion           AccionAuditoria
-  usuarioId        String           @db.Uuid @map("usuario_id")
-  timestamp        DateTime         @default(now())
-  datosAntes       Json?            @map("datos_antes") // snapshot del registro antes del cambio
-  datosDespues     Json?            @map("datos_despues")
-  ipOrigen         String?          @map("ip_origen")
-  motivo           String?          // obligatorio para eliminar/restaurar
+  id                String          @id @default(uuid()) @db.Uuid
+  registroCalidadId String          @map("registro_calidad_id") @db.Uuid
+  accion            AccionAuditoria
+  usuarioId         String          @map("usuario_id") @db.Uuid
+  timestamp         DateTime        @default(now())
+  datosAntes        Json?           @map("datos_antes") // snapshot del registro antes del cambio
+  datosDespues      Json?           @map("datos_despues")
+  ipOrigen          String?         @map("ip_origen")
+  motivo            String? // obligatorio para eliminar/restaurar
 
   registroCalidad RegistroCalidad @relation(fields: [registroCalidadId], references: [id])
   usuario         Usuario         @relation(fields: [usuarioId], references: [id])
@@ -556,17 +561,147 @@ model AuditoriaRegistro {
 // -----------------------------------------------------------------------------
 
 model LoteEstadoLog {
-  id              String     @id @default(uuid()) @db.Uuid
-  loteId          String     @db.Uuid @map("lote_id")
-  estadoAnterior  EstadoLote @map("estado_anterior")
-  estadoNuevo     EstadoLote @map("estado_nuevo")
-  usuarioId       String     @db.Uuid @map("usuario_id")
-  motivo          String?
-  timestamp       DateTime   @default(now())
+  id             String     @id @default(uuid()) @db.Uuid
+  loteId         String     @map("lote_id") @db.Uuid
+  estadoAnterior EstadoLote @map("estado_anterior")
+  estadoNuevo    EstadoLote @map("estado_nuevo")
+  usuarioId      String     @map("usuario_id") @db.Uuid
+  motivo         String?
+  timestamp      DateTime   @default(now())
 
   lote    Lote    @relation(fields: [loteId], references: [id])
   usuario Usuario @relation(fields: [usuarioId], references: [id])
 
   @@index([loteId, timestamp])
   @@map("lote_estado_log")
+}
+
+// -----------------------------------------------------------------------------
+// MÓDULO: Especificaciones de calidad por producto (parámetros estándar)
+//
+// Capa de "OBJETIVO DE CALIDAD" por producto, SEPARADA de la validación
+// estructural de schema_json (ADR-001, ver ADR-015):
+//   - schema_json / AJV = cota física + estructural. Gate de guardado: rechaza
+//     lo imposible (3000 g de alfajor). NO se aprieta hasta volverlo rango de
+//     calidad, o se perderían registros de desviaciones que HACCP debe capturar.
+//   - EspecificacionProducto = objetivo/rango por producto, se muestra EN VIVO
+//     al capturar y NO bloquea el guardado (ni siquiera superar el límite crítico
+//     de un PCC — el punto HACCP es *registrar* la desviación, no impedirla).
+// -----------------------------------------------------------------------------
+
+// Catálogo CERRADO de parámetros especificables (solo admin agrega). `unidad` es
+// informativa/de revisión: NO hay enforcement de que coincida con la unidad
+// implícita del campo medido — schema_json no tiene metadata de unidad (ADR-015).
+model Parametro {
+  id        String   @id @default(uuid()) @db.Uuid
+  clave     String   @unique // identificador estable: "peso", "temp_ddl"
+  nombre    String // display: "Peso", "Temperatura DDL"
+  unidad    String // "g", "°C", "%" — informativa
+  activo    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  bindings         PuntoControlParametro[]
+  especificaciones EspecificacionProducto[]
+
+  @@map("parametros")
+}
+
+// Cómo se extrae/agrega el campo medido de `data` al compararlo contra la spec.
+enum AgregacionParametro {
+  escalar // un valor único en data (ej. temp_ddl)
+  array_cada // array de N; cada elemento se compara contra la misma spec (mediciones[12])
+  array_promedio // array de N; se compara el promedio
+  derivado // no se compara en vivo; se evalúa al cierre de jornada (peso_baño)
+}
+
+// Binding ESTRUCTURAL parámetro↔campo, por PUNTO DE CONTROL (no por producto).
+// Resuelve que un mismo nombre físico de campo ("mediciones", "peso") significa
+// cosas distintas según el formulario. Define qué parámetros son medibles en
+// cada PC y es el target de FK legítimo de EspecificacionProducto. Es estructura
+// derivada de los schema_json/tipoFormulario existentes — se siembra en el seed,
+// no es dato de negocio.
+model PuntoControlParametro {
+  puntoControlId String              @map("punto_control_id") @db.Uuid
+  parametroId    String              @map("parametro_id") @db.Uuid
+  // Clave o JSON-path del valor dentro de RegistroCalidad.data:
+  // "mediciones", "temp_ddl", "filas[].peso_neto"
+  campoData      String              @map("campo_data")
+  agregacion     AgregacionParametro
+
+  puntoControl PuntoControl @relation(fields: [puntoControlId], references: [id], onDelete: Cascade)
+  parametro    Parametro    @relation(fields: [parametroId], references: [id], onDelete: Cascade)
+
+  @@id([puntoControlId, parametroId])
+  @@map("puntos_control_parametros")
+}
+
+// Especificación de calidad de un producto para un (punto de control, parámetro).
+// VERSIONADA append-only: editar = versión nueva (cerrar vigenteHasta de la
+// anterior + abrir vigenteDesde de la nueva en la MISMA transacción, sin gaps ni
+// solapes). Reconstrucción de "spec vigente para un registro" por ventana
+// temporal: la versión cuyo [vigenteDesde, vigenteHasta) contiene el createdAt
+// del registro. Sin FK dura registro→spec (un registro se evalúa contra N specs).
+// NUNCA update (salvo cerrar vigenteHasta) ni delete — correcciones = versión
+// nueva. Sin campo `activo`: la única verdad de vigencia es vigenteHasta IS NULL.
+// Índice único PARCIAL (producto, puntoControl, parametro) WHERE vigente_hasta
+// IS NULL: en SQL crudo en la migración (Prisma no expresa índices parciales),
+// mismo patrón que registros_calidad_pallet_unico. Ver ADR-015.
+model EspecificacionProducto {
+  id             String    @id @default(uuid()) @db.Uuid
+  productoId     String    @map("producto_id") @db.Uuid
+  puntoControlId String    @map("punto_control_id") @db.Uuid
+  parametroId    String    @map("parametro_id") @db.Uuid
+  objetivo       Decimal?  @db.Decimal(10, 4)
+  aceptacionMin  Decimal?  @map("aceptacion_min") @db.Decimal(10, 4)
+  aceptacionMax  Decimal?  @map("aceptacion_max") @db.Decimal(10, 4)
+  criticoMin     Decimal?  @map("critico_min") @db.Decimal(10, 4)
+  criticoMax     Decimal?  @map("critico_max") @db.Decimal(10, 4)
+  esCritico      Boolean   @default(false) @map("es_critico")
+  version        Int       @default(1)
+  vigenteDesde   DateTime  @map("vigente_desde") @db.Timestamptz(6)
+  vigenteHasta   DateTime? @map("vigente_hasta") @db.Timestamptz(6)
+  creadoPorId    String    @map("creado_por_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  producto     Producto     @relation(fields: [productoId], references: [id])
+  puntoControl PuntoControl @relation(fields: [puntoControlId], references: [id])
+  parametro    Parametro    @relation(fields: [parametroId], references: [id])
+  creadoPor    Usuario      @relation("EspecCreadaPor", fields: [creadoPorId], references: [id])
+
+  // Resolución de "spec vigente en fecha X" y listado de versiones por spec lógica
+  @@index([productoId, puntoControlId, parametroId, vigenteDesde])
+  @@map("especificaciones_producto")
+}
+
+// -----------------------------------------------------------------------------
+// TRAZABILIDAD: auditoría del maestro (append-only)
+//
+// Cambios sobre Producto/Marca/Familia/EspecificacionProducto quedan trazados
+// con snapshot antes/después. Mismo criterio HACCP que AuditoriaRegistro: ningún
+// registro se modifica ni elimina jamás.
+// -----------------------------------------------------------------------------
+
+enum EntidadMaestro {
+  producto
+  marca
+  familia
+  especificacion_producto
+}
+
+model AuditoriaMaestro {
+  id              String          @id @default(uuid()) @db.Uuid
+  entidad         EntidadMaestro
+  entidadId       String          @map("entidad_id") @db.Uuid
+  accion          AccionAuditoria
+  snapshotAntes   Json?           @map("snapshot_antes")
+  snapshotDespues Json?           @map("snapshot_despues")
+  usuarioId       String          @map("usuario_id") @db.Uuid
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  usuario Usuario @relation(fields: [usuarioId], references: [id])
+
+  @@index([entidad, entidadId])
+  @@index([usuarioId, createdAt])
+  @@map("auditoria_maestro")
 }

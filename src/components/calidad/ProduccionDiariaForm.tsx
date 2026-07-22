@@ -8,6 +8,7 @@ import { useBatchGuardar } from "@/hooks/useBatchGuardar";
 import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
 import { calcularVencimiento } from "@/lib/calidad/lote-pt";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
+import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 type Props = { puntoControlId: string; lineaProductivaId: string; productoActivo: ProductoActivoLinea };
@@ -298,15 +299,22 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
                   // Con estándar del maestro y pallet completo, las cajas quedan
                   // bloqueadas en el estándar — se editan marcando el pallet incompleto.
                   const bloqueado = key === "cajas" && cajasEstandar !== null && !entrada.pallet_incompleto;
+                  // Spec de calidad para "peso_alfajor" (si el producto la tiene cargada)
+                  const spec = key === "peso_alfajor" ? specDeCampo(productoActivo.especificaciones, "peso_alfajor") : null;
+                  const valNum = entrada[key] ? parseFloat(entrada[key]) : null;
                   return (
                     <button key={key} type="button" aria-disabled={bloqueado}
                       onClick={() => { if (!bloqueado) setCampoActivo({ entradaId: entrada.id, campo: key }); }}
                       className={`rounded-xl border-2 p-2 text-left transition-all ${bloqueado ? "border-green-200 bg-green-50/60 cursor-default" : `active:scale-95 ${activo ? "border-[#E1000F] bg-red-50" : entrada[key] ? "border-green-300 bg-green-50" : "border-gray-200 bg-gray-50"}`}`}>
                       <p className="text-xs text-gray-400 truncate">{label}</p>
-                      <p className={`text-xl font-bold font-mono mt-0.5 ${entrada[key] ? "text-gray-900" : "text-gray-300"}`}>
-                        {entrada[key] || "—"}{entrada[key] && unidad ? <span className="text-xs font-normal text-gray-400 ml-0.5">{unidad}</span> : null}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <p className={`text-xl font-bold font-mono mt-0.5 ${entrada[key] ? "text-gray-900" : "text-gray-300"}`}>
+                          {entrada[key] || "—"}{entrada[key] && unidad ? <span className="text-xs font-normal text-gray-400 ml-0.5">{unidad}</span> : null}
+                        </p>
+                        {spec && <IndicadorSpec valor={valNum} spec={spec} conTexto />}
+                      </div>
                       {bloqueado && <p className="text-[11px] text-green-600 mt-0.5">Estándar del producto</p>}
+                      {spec && !bloqueado && <div className="mt-0.5"><RangoObjetivo spec={spec} /></div>}
                     </button>
                   );
                 })}

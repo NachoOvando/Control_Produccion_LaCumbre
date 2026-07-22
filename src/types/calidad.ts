@@ -51,6 +51,23 @@ export type RegistroCalidadDetalle = {
   createdAt: Date;
 };
 
+// Especificación de calidad de un campo medido, ya resuelta para el producto
+// activo y este punto de control (ADR-015). La usan los formularios de captura
+// para mostrar el rango objetivo y marcar en vivo dentro/fuera de spec. Se
+// vincula al campo del `data` por `campoData` (ej. "mediciones", "temp_ddl").
+export type EspecCampo = {
+  campoData: string;
+  agregacion: "escalar" | "array_cada" | "array_promedio" | "derivado";
+  parametroNombre: string;
+  unidad: string;
+  objetivo: number | null;
+  aceptacionMin: number | null;
+  aceptacionMax: number | null;
+  criticoMin: number | null;
+  criticoMax: number | null;
+  esCritico: boolean;
+};
+
 // Producto/lote activo de una línea (LineaProduccionEstado) — reemplaza el
 // <select> "Producto en producción" que antes se repetía en cada formulario.
 export type ProductoActivoLinea = {
@@ -68,6 +85,9 @@ export type ProductoActivoLinea = {
   cajasPorPallet: number | null;
   activadoPorNombre: string;
   activadoEn: string; // ISO
+  // Specs vigentes del producto para el punto de control en contexto (solo se
+  // puebla en la page de captura; en el selector de producto va undefined).
+  especificaciones?: EspecCampo[];
 };
 
 // Estructura del formulario "Defectos de Conformado" en la UI

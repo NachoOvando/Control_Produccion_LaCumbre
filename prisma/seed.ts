@@ -863,6 +863,71 @@ async function main() {
   // asignar a ninguna línea todavía (la línea que la usaba se eliminó).
   console.log("✅ Relaciones línea ↔ punto de control configuradas");
 
+  // ── Catálogo de parámetros + bindings (ADR-015) ─────────────────────────────
+  // Catálogo CERRADO de parámetros especificables. Los bindings (punto de control
+  // × parámetro → campo de data + agregación) son ESTRUCTURA derivada de los
+  // schema_json de arriba, no dato de negocio — por eso van en el seed. Las
+  // especificaciones (rangos por producto) NO se siembran: son dato de calidad,
+  // se cargan a demanda desde el módulo admin.
+  const parametrosCatalogo = [
+    { clave: "peso_alfajor", nombre: "Peso alfajor", unidad: "g" },
+    { clave: "peso_relleno", nombre: "Peso relleno", unidad: "g" },
+    { clave: "peso_bano", nombre: "Peso baño", unidad: "g" },
+    { clave: "peso_tapa", nombre: "Peso tapa", unidad: "g" },
+    { clave: "peso_neto", nombre: "Peso neto conformado", unidad: "g" },
+    { clave: "temp_producto", nombre: "Temp. producto salida túnel", unidad: "°C" },
+    { clave: "temp_condensacion", nombre: "Temp. condensación", unidad: "°C" },
+    { clave: "humedad_relativa", nombre: "Humedad relativa", unidad: "%" },
+    { clave: "temp_ddl", nombre: "Temp. tanque DDL", unidad: "°C" },
+    { clave: "temp_bon_o_bon", nombre: "Temp. tanque Bon o Bon", unidad: "°C" },
+    { clave: "temp_cobertura_1", nombre: "Temp. cobertura tanque 1", unidad: "°C" },
+    { clave: "temp_cobertura_2", nombre: "Temp. cobertura tanque 2", unidad: "°C" },
+    { clave: "temp_bano", nombre: "Temp. baño", unidad: "°C" },
+  ] as const;
+
+  const paramPorClave = new Map<string, { id: string }>();
+  for (const p of parametrosCatalogo) {
+    const parametro = await prisma.parametro.upsert({
+      where: { clave: p.clave },
+      update: { nombre: p.nombre, unidad: p.unidad },
+      create: { clave: p.clave, nombre: p.nombre, unidad: p.unidad },
+    });
+    paramPorClave.set(p.clave, parametro);
+  }
+  console.log(`✅ Catálogo de parámetros (${parametrosCatalogo.length})`);
+
+  // Binding: en qué campo de `data` vive cada parámetro por punto de control y
+  // cómo se agrega. `array_cada` = cada elemento del array se compara contra la
+  // misma spec; `escalar` = valor único; `derivado` = no se compara en vivo, se
+  // evalúa al cierre (peso_baño es promedio de restas apareadas).
+  const bindings: { pc: { id: string }; clave: string; campoData: string; agregacion: "escalar" | "array_cada" | "array_promedio" | "derivado" }[] = [
+    { pc: pcPesoAlfajor, clave: "peso_alfajor", campoData: "mediciones", agregacion: "array_cada" },
+    { pc: pcPesoAlfajor, clave: "peso_tapa", campoData: "peso_tapa", agregacion: "escalar" },
+    { pc: pcPesoRelleno, clave: "peso_relleno", campoData: "mediciones", agregacion: "array_cada" },
+    { pc: pcPesoBano, clave: "peso_bano", campoData: "mediciones", agregacion: "derivado" },
+    { pc: pcPesoBano, clave: "temp_bano", campoData: "temp_bano", agregacion: "escalar" },
+    { pc: pcTempTunel, clave: "temp_producto", campoData: "temp_producto", agregacion: "escalar" },
+    { pc: pcTempTunel, clave: "temp_condensacion", campoData: "temp_condensacion", agregacion: "escalar" },
+    { pc: pcTempTunel, clave: "humedad_relativa", campoData: "humedad_relativa", agregacion: "escalar" },
+    { pc: pcTempTanques, clave: "temp_ddl", campoData: "temp_ddl", agregacion: "escalar" },
+    { pc: pcTempTanques, clave: "temp_bon_o_bon", campoData: "temp_bon_o_bon", agregacion: "escalar" },
+    { pc: pcTempTanques, clave: "temp_cobertura_1", campoData: "tanque_1_cobertura", agregacion: "escalar" },
+    { pc: pcTempTanques, clave: "temp_cobertura_2", campoData: "tanque_2_cobertura", agregacion: "escalar" },
+    { pc: pcProduccionDiaria, clave: "peso_alfajor", campoData: "peso_alfajor", agregacion: "escalar" },
+    { pc: pcDefectosConformado, clave: "peso_neto", campoData: "filas[].peso_neto", agregacion: "array_cada" },
+  ];
+
+  for (const b of bindings) {
+    const parametro = paramPorClave.get(b.clave);
+    if (!parametro) continue;
+    await prisma.puntoControlParametro.upsert({
+      where: { puntoControlId_parametroId: { puntoControlId: b.pc.id, parametroId: parametro.id } },
+      update: { campoData: b.campoData, agregacion: b.agregacion },
+      create: { puntoControlId: b.pc.id, parametroId: parametro.id, campoData: b.campoData, agregacion: b.agregacion },
+    });
+  }
+  console.log(`✅ Bindings parámetro↔campo (${bindings.length})`);
+
   // Los lotes se dan de alta desde /calidad/lotes/nuevo (o el import real de
   // producción) — no hay lotes de prueba en el seed.
 

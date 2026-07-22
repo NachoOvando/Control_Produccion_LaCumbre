@@ -274,7 +274,7 @@ type ProductoActivoLinea = {
 };
 ```
 
-`vidaUtilMeses` y `nomenclaturaLote` son datos de **maestro del producto** (no de la activación en sí), incluidos a propósito: sin ellos, `ProduccionDiariaForm` perdía la auto-sugerencia de vencimiento de PT y de nomenclatura de lote que ya tenía antes de esta feature. Durante el desarrollo se sacaron por error del tipo en un momento y se detectó la regresión (el formulario dejaba de auto-completar esos campos); se volvieron a agregar. Si en el futuro alguien "limpia" este tipo para dejarlo mínimo, tiene que confirmar que esos dos formularios consumidores siguen recibiendo el dato desde otro lado antes de sacarlos. **Desde ADR-013, `vidaUtilMeses` además es obligatorio para poder activar el producto — ver esa sección.**
+`vidaUtilMeses` y `nomenclaturaLote` son datos de **maestro del producto** (no de la activación en sí), incluidos a propósito: sin ellos, `ProduccionDiariaForm` perdía la auto-sugerencia de vencimiento de PT y de nomenclatura de lote que ya tenía antes de esta feature. Durante el desarrollo se sacaron por error del tipo en un momento y se detectó la regresión (el formulario dejaba de auto-completar esos campos); se volvieron a agregar. Si en el futuro alguien "limpia" este tipo para dejarlo mínimo, tiene que confirmar que esos dos formularios consumidores siguen recibiendo el dato desde otro lado antes de sacarlos. **Desde ADR-013, `vidaUtilMeses` además es obligatorio para poder activar el producto — ver esa sección.** **Desde ADR-015, el tipo ganó además `cajasPorPallet` y un campo opcional `especificaciones: EspecCampo[]` (specs de calidad vigentes del producto para el punto de control en contexto, solo poblado en la page de captura) — ver ADR-015.**
 
 `familiaSlug` se agregó en una iteración posterior (pedido explícito del usuario: "la familia está incluida en el producto seleccionado") para que el filtrado de la grilla de puntos de control se derive del producto activo en vez de un filtro manual — ver más abajo. Poblado desde `producto.familia.slug` en el `include` de `getProductoActivoDeLinea`/`activarProductoLinea` (`src/db/calidad.repository.ts`) y en los dos mappers que aplanan el estado de Prisma (`route.ts` del endpoint y el mapper inline de `[lineaId]/[puntoControlId]/page.tsx`).
 
@@ -396,6 +396,61 @@ Se verificó el bug real en browser: un lote con vencimiento mostrado "19/11" pe
 
 ---
 
+## ADR-015: Administración del maestro + especificaciones de calidad por producto (comparación medido-vs-estándar en vivo)
+
+**Contexto:** hasta ahora el maestro (`Producto`/`Marca`/`Familia`) solo se poblaba vía seed o el script de import, sin UI ni API de escritura (deuda de ADR-010), y las planillas de calidad no tenían forma de declarar el objetivo/rango esperado de cada medición por producto. Los rangos de `schema_json` (ADR-001) son cotas **físicas/estructurales** (gate de guardado), no objetivos de calidad. Esta feature agrega: (1) una pantalla de administración del maestro con alta/edición y auditoría append-only; (2) especificaciones de calidad por producto, versionadas; (3) comparación medido-vs-estándar en vivo en los formularios de captura.
+
+**Aprobado por (cadena completa, sin veto):** `scm-alimentos` (reglas de negocio) → `arquitecto-industrial` (modelo de datos y convivencia con ADR-001) → `backend-senior` (repository + service) → `frontend-ux` (UI admin + indicador en vivo) → `seguridad-analista` (aprobado con observaciones NO bloqueantes M1/B1/B2 — ver deuda).
+
+> **Nota de numeración:** durante el desarrollo el código de esta feature referenciaba el ADR como "ADR-014" en comentarios, pero **014 ya estaba tomado** por el pooler/DIRECT_URL — el número correcto es **ADR-015**. **Corregido el 2026-07-21** en todos los comentarios de código y del schema (`roles.ts`, `especificaciones.ts`, `maestro-http.ts`, `maestro.repository.ts`, `EspecCampo` en `types/calidad.ts`, `IndicadorSpec.tsx`, `EspecificacionesEditor.tsx`, `especificaciones/route.ts`, `[puntoControlId]/page.tsx`, `seed.ts`, `schema.prisma`). **Dos referencias a "ADR-014" quedan a propósito:** (a) `src/lib/prisma.ts` — es la referencia legítima al pooler/DIRECT_URL; (b) el comentario del SQL en `migrations/20260721170200_.../migration.sql` (dice "ADR-006/ADR-014") — no se edita para no romper el checksum de la migración ya aplicada; es solo un comentario sin efecto.
+
+### Modelo de datos — 4 tablas nuevas
+
+Migración `prisma/migrations/20260721170200_maestro_admin_especificaciones/`. Diccionario de datos completo más abajo (sección "Modelo de datos").
+
+1. **`Parametro` (`parametros`):** catálogo **CERRADO** de parámetros especificables (`clave` unique, `nombre`, `unidad`). Solo el admin/seed agrega parámetros nuevos. No es un campo de texto libre — la lista de qué se puede especificar está acotada.
+2. **`PuntoControlParametro` (`puntos_control_parametros`):** binding estructural (punto de control × parámetro) → `campoData` (clave o JSON-path dentro de `RegistroCalidad.data`) + `agregacion` (enum `escalar` / `array_cada` / `array_promedio` / `derivado`). Resuelve el mapeo "este parámetro se compara contra este campo del formulario, y así se agrega" sin hardcodeo. Es **estructura derivada de los `schema_json`**, se siembra en el seed — no es dato de negocio editable por el admin.
+3. **`EspecificacionProducto` (`especificaciones_producto`):** la spec de calidad, **versionada append-only**, por la terna (producto × punto de control × parámetro). Campos: `objetivo`, `aceptacionMin/Max`, `criticoMin/Max` (`Decimal(10,4)`), `esCritico`, `version`, `vigenteDesde/Hasta` (timestamptz), `creadoPorId`. **No tiene campo `activo`** — la única verdad de vigencia es `vigenteHasta IS NULL`. Un índice único **PARCIAL** (`especificaciones_producto_vigente_unica WHERE vigente_hasta IS NULL`, SQL crudo en la migración porque Prisma no lo expresa en el DSL) garantiza a lo sumo UNA versión vigente por terna.
+4. **`AuditoriaMaestro` (`auditoria_maestro`):** log **append-only** que cubre `Producto`/`Marca`/`Familia`/`EspecificacionProducto`, con snapshot antes/después + usuario, escrito dentro de la misma transacción de cada cambio. Mismo criterio HACCP que `AuditoriaRegistro` (ADR-001). Cierra la deuda "sin auditoría append-only sobre el maestro" de ADR-010.
+
+### Reglas de negocio (aprobadas por scm-alimentos + arquitecto-industrial, confirmadas por el usuario)
+
+1. **Spec por (producto × PUNTO DE CONTROL × parámetro)**, no solo por producto. Un mismo parámetro (ej. peso) tiene un target distinto según la estación de medición: no es lo mismo el peso en relleno, en bañado o en el conformado final.
+2. **Versionado con vigencia, append-only estricto.** Editar una spec **no pisa** la anterior: en la misma transacción y con el mismo timestamp `T` se cierra la versión vigente (`vigenteHasta = T`) y se abre una nueva (`vigenteDesde = T`, `version + 1`). La "spec vigente para un registro dado" se reconstruye por ventana temporal `[vigenteDesde, vigenteHasta)` contra el `createdAt` del registro. **Sin FK dura registro→spec** (la relación es por ventana temporal, no por clave). Correcciones = versión nueva, nunca pisar ni borrar.
+3. **Tres capas de límite:** objetivo (target) + rango de aceptación (operativo/de calidad) + límite crítico (inocuidad/PCC, el envolvente externo). `min` y `max` son independientes en cada capa (tolerancia asimétrica legítima). **Superar el límite crítico NO bloquea el guardado** — el punto HACCP es *registrar* la desviación, no impedir que se cargue. El **flujo formal de tratamiento de desviación de PCC (acción correctiva + firma) quedó DIFERIDO** a una fase futura; el modelo ya deja el lugar con `criticoMin/Max` + `esCritico`.
+4. **Convivencia con `schema_json`/AJV (ADR-001):** `schema_json` sigue siendo la validación estructural + cota física, y es el **gate de guardado**. La spec por producto es la **capa de objetivo de calidad**: se muestra en vivo y colorea la medición, pero **no toca el gate de guardado**. Decisión explícita: **no apretar los rangos de `schema_json`** hasta volverlos rangos de calidad — si se hiciera, el sistema empezaría a rechazar (perder) justamente los registros de desviación que HACCP necesita conservar.
+5. **La unidad del parámetro es informativa**, sin enforcement de que coincida con la unidad del campo medido (`schema_json` no tiene metadata de unidad). Es un control de revisión humana, no automático.
+6. **`peso_baño` usa agregación `derivado`:** se evalúa al cierre de jornada (promedio de restas apareadas, ADR-008), no medición por medición — por eso no se compara en vivo.
+7. **Edición del maestro: SOLO rol `admin`** (`ROLES_ADMIN_MAESTRO` en `src/lib/auth/roles.ts`). Es configuración crítica de trazabilidad de exportación; el resto de roles solo consulta.
+
+### Capas implementadas
+
+- **Repository** `src/db/maestro.repository.ts`: CRUD de Producto/Marca/Familia + `versionarEspecificacion` + `cerrarEspecificacion` + auditoría en transacción + `getEspecificacionesCaptura` (specs vigentes de un producto para un punto de control, con su binding, listo para el formulario). Lecturas: `getProductosMaestro`, `getMarcas`, `getFamilias`, `getParametros`, `getBindings`, `getEspecificacionesVigentesDeProducto`, `getTodasEspecificacionesVigentes`, `getHistorialEspecificacion`.
+- **Service** `src/services/calidad/maestro.service.ts`: validación Zod + reglas de negocio. Valida el **ordenamiento de límites** (crítico ⊇ aceptación ∋ objetivo; `min <= max` en cada par); verifica que las refs (familia/marca/línea) y el binding (punto de control × parámetro) existan antes de escribir. Contrato de resultado discriminado por `ok`, igual que los otros services.
+- **API (solo escritura, solo admin):** 7 endpoints REST bajo `/api/v1/calidad/maestro/`, con gate compartido `src/lib/calidad/maestro-http.ts` (`gateAdminMaestro` + `parseBody` + `responder` + mapa `code→status`). Ver `docs/api-reference.md`.
+- **Lecturas por Server Component, NO GET HTTP:** tanto el módulo admin como la captura leen del repository directamente desde Server Components — no hay ruta HTTP de lectura para estas entidades (mismo criterio que el resto del repo).
+- **Helper puro** `src/lib/calidad/especificaciones.ts`: `evaluarValor(valor, spec)` → `dentro` / `fuera_aceptacion` / `fuera_critico` / `sin_spec` (bordes inclusivos, `min`/`max` evaluados de forma independiente); `formatearRango(spec, unidad)`. Testeable sin framework (`especificaciones.test.ts`).
+- **UI admin:** `src/app/calidad/maestro/page.tsx` + `src/components/calidad/maestro/*` (`MaestroView`, `ProductosPanel`, `EspecificacionesEditor`, `CatalogoPanel`). La card de entrada en `src/app/calidad/page.tsx` solo se muestra al rol admin.
+- **Comparación en vivo:** el tipo `ProductoActivoLinea` (`src/types/calidad.ts`) ganó `especificaciones?: EspecCampo[]`, poblado en el Server Component `[lineaId]/[puntoControlId]/page.tsx` con **falla suave** (si la resolución de specs falla, el formulario sigue funcionando sin el indicador). El componente `src/components/calidad/IndicadorSpec.tsx` está integrado en `TemperaturaForm`, `ProduccionDiariaForm` y `PesoMedicionesForm` — muestra el rango objetivo y colorea dentro/fuera de spec.
+
+### Seed
+
+Catálogo de **13 parámetros + 14 bindings** (`prisma/seed.ts`), estructura derivada de los `schema_json` existentes. **Sin backfill de especificaciones** — los rangos por producto son dato de calidad y se cargan a demanda desde el módulo admin.
+
+### Verificación
+
+99 tests en total (nuevos: helper `especificaciones` + `maestro.service`). Typecheck limpio. Verificado en browser contra Supabase real: el admin carga 104 productos; se guardó una spec real (Alfajor Negro, peso 72–78 / crítico 68–82, version 1 vigente en DB); el formulario de Peso Alfajor muestra "objetivo 72–78 g" y colorea las mediciones.
+
+### Deuda técnica conocida (de `seguridad-analista`, aprobado con observaciones — NO bloqueante)
+
+- **M1 (Medio):** `auditoria_maestro` y `AuditoriaRegistro` son append-only solo a nivel aplicación; a nivel motor, el rol de la app todavía tiene `UPDATE`/`DELETE` sobre esas tablas. **Antes de entrar al circuito de exportación Arcor:** `REVOKE UPDATE, DELETE` para el rol de la app, o triggers `BEFORE UPDATE/DELETE` que bloqueen la modificación.
+- **B1 (Bajo):** sin rate limiting en los endpoints de escritura del maestro (reusar el patrón de `rate-limit-login.ts` si se agrega).
+- **B2 (Bajo):** TOCTOU benigno en `verificarRefsProducto` — si una ref (familia/marca/línea) se borra entre el `findUnique` de verificación y el `create`, el resultado es un 500 (P2003) en vez de un 404/409 claro. Benigno hoy (no hay borrado de esas entidades desde la app).
+- **Dato pendiente del usuario:** falta la lista real de PCC del plan HACCP para marcar `esCritico` correctamente en las specs (hoy `esCritico` queda en `false` por defecto).
+- **Diferido:** el flujo formal de tratamiento de desviación de PCC (acción correctiva + firma) — el modelo ya deja el lugar (`criticoMin/Max` + `esCritico`).
+
+---
+
 ## Integración OT (PLC/SCADA) — diseño previsto, NO implementado
 
 Hoy no hay ninguna integración (tampoco con SAP). A futuro se integrarán PLC/SCADA de planta. Restricción no negociable de cualquier diseño que se apruebe: **separación IT/OT** — la red OT no expone la base de datos ni consume la API directamente sin una capa intermedia. El detalle del diseño se documentará cuando `arquitecto-industrial` lo apruebe.
@@ -404,7 +459,7 @@ Hoy no hay ninguna integración (tampoco con SAP). A futuro se integrarán PLC/S
 
 ## Modelo de datos — Maestro de productos
 
-(Complementa el schema Prisma en `prisma/schema.prisma`, que es la fuente de verdad del DDL. Ver ADR-010 para el razonamiento de diseño del maestro, y ADR-012 para `LineaProduccionEstado`/`LineaActivacionLog`.)
+(Complementa el schema Prisma en `prisma/schema.prisma`, que es la fuente de verdad del DDL. Ver ADR-010 para el razonamiento de diseño del maestro, ADR-012 para `LineaProduccionEstado`/`LineaActivacionLog`, y ADR-015 para las tablas de especificaciones.)
 
 ### Diagrama entidad-relación (simplificado)
 
@@ -430,6 +485,9 @@ Marca (1) ──< (N) Producto (N) >── (1) Familia
                     │ (1) >── (N) LineaActivacionLog ──> (1) Lote, (1) Usuario  [historial append-only, ver ADR-012]
 
 Familia (1) ──< (N) PuntoControlFamilia >── (N) PuntoControl
+
+Producto (1) ──< (N) EspecificacionProducto >── (1) PuntoControl, (1) Parametro   [spec versionada, ver ADR-015]
+PuntoControl (1) ──< (N) PuntoControlParametro >── (1) Parametro                  [binding parámetro↔campo, ver ADR-015]
 ```
 
 ### Marca (`marcas`)
@@ -478,6 +536,8 @@ Tabla puente `puntoControlId` + `familiaId` (PK compuesta). Declara qué familia
 
 **Reglas de integridad:** `sku` y `nombre` únicos (con `null` múltiple permitido en `sku`); `familiaId` y `marcaId` `NOT NULL`; `lineaProductivaId` opcional. Índices en `familiaId`, `marcaId`, `lineaProductivaId` (ver ADR-010, punto 6).
 
+**Edición desde la app (desde ADR-015):** `Producto`, `Marca` y `Familia` tienen alta/edición vía el módulo admin (`POST`/`PATCH /api/v1/calidad/maestro/{productos,marcas,familias}`, solo rol `admin`), con auditoría append-only en `auditoria_maestro`. El script de import (`npm run db:import-productos`) sigue siendo la vía de carga masiva.
+
 ### Lote (`lotes`)
 
 Ver ADR-011 para el razonamiento del alta manual, ADR-012 para el find-or-create de "producto activo por línea", y ADR-013 para el formato definitivo de `numeroLote` en el flujo automático.
@@ -519,6 +579,69 @@ Ver ADR-012. **Append-only** — nunca `update`/`delete`.
 | `usuarioId` | FK → `Usuario`, `onDelete: Restrict` | |
 | `createdAt` | `DateTime` default `now()` | Índice `[lineaProductivaId, createdAt]` — cubre las consultas del guard anti-abuso (ADR-012). |
 
+### Parametro (`parametros`) — ADR-015
+
+Catálogo **CERRADO** de parámetros especificables. Solo admin/seed agrega.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | `String` (UUID), PK | |
+| `clave` | `String` unique | Ej. `peso_alfajor`, `temp_ddl`, `humedad_relativa`. |
+| `nombre` | `String` | Etiqueta legible ("Peso alfajor", "Temp. tanque DDL"). |
+| `unidad` | `String` | Informativa (no hay enforcement de que coincida con la unidad del campo medido — ADR-015, regla 5). |
+| `activo` | `Boolean` default `true` | |
+| `createdAt` / `updatedAt` | `DateTime` | |
+
+### PuntoControlParametro (`puntos_control_parametros`) — ADR-015
+
+Binding estructural: qué parámetros son medibles en cada punto de control, en qué campo de `data` viven y cómo se agregan. Se siembra en el seed (estructura derivada de los `schema_json`), no es dato editable por el admin.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `puntoControlId` | FK → `PuntoControl`, `onDelete: Cascade` | PK compuesta con `parametroId`. |
+| `parametroId` | FK → `Parametro`, `onDelete: Cascade` | |
+| `campoData` | `String` | Clave o JSON-path dentro de `RegistroCalidad.data` (ej. `mediciones`, `temp_ddl`, `filas[].peso_neto`). |
+| `agregacion` | enum `AgregacionParametro` (`escalar`, `array_cada`, `array_promedio`, `derivado`) | `escalar` = valor único; `array_cada` = cada elemento del array se compara contra la misma spec; `array_promedio` = se compara el promedio; `derivado` = no se compara en vivo, se evalúa al cierre (ej. `peso_baño`). |
+
+### EspecificacionProducto (`especificaciones_producto`) — ADR-015
+
+Spec de calidad **versionada append-only** por la terna (producto × punto de control × parámetro). Editar = versión nueva; nunca se pisa ni se borra. Vigencia por ventana temporal.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | `String` (UUID), PK | |
+| `productoId` | FK → `Producto`, `onDelete: Restrict` | |
+| `puntoControlId` | FK → `PuntoControl`, `onDelete: Restrict` | |
+| `parametroId` | FK → `Parametro`, `onDelete: Restrict` | |
+| `objetivo` | `Decimal(10,4)?` | Target. |
+| `aceptacionMin` / `aceptacionMax` | `Decimal(10,4)?` | Rango operativo/de calidad. |
+| `criticoMin` / `criticoMax` | `Decimal(10,4)?` | Límite de inocuidad/PCC (envolvente externo). |
+| `esCritico` | `Boolean` default `false` | Marca PCC. **Hoy siempre `false` por defecto** — falta la lista real de PCC del plan HACCP (dato pendiente del usuario, ver ADR-015). |
+| `version` | `Int` default `1` | Se incrementa en cada versión nueva de la misma terna. |
+| `vigenteDesde` | `TIMESTAMPTZ` | Inicio de vigencia de esta versión. |
+| `vigenteHasta` | `TIMESTAMPTZ?` | Fin de vigencia. **`NULL` = versión vigente.** No hay campo `activo` — esta es la única verdad de vigencia. |
+| `creadoPorId` | FK → `Usuario`, `onDelete: Restrict` | Quién cargó esta versión. |
+| `createdAt` | `DateTime` default `now()` | |
+
+**Reglas de integridad:** índice único **PARCIAL** `especificaciones_producto_vigente_unica` sobre `(producto_id, punto_control_id, parametro_id) WHERE vigente_hasta IS NULL` — garantiza a lo sumo UNA versión vigente por terna (las versiones cerradas no cuentan, así el historial no colisiona). Es la red de seguridad dura del versionado append-only: aunque una transacción con bug intente abrir dos vigentes, Postgres la rechaza. Índice de consulta `(producto_id, punto_control_id, parametro_id, vigente_desde)`.
+
+### AuditoriaMaestro (`auditoria_maestro`) — ADR-015
+
+Log **append-only** de cambios sobre el maestro y las especificaciones. Escrito en la misma transacción del cambio auditado. Mismo criterio HACCP que `AuditoriaRegistro`.
+
+| Campo | Tipo | Notas |
+|---|---|---|
+| `id` | `String` (UUID), PK | |
+| `entidad` | enum `EntidadMaestro` (`producto`, `marca`, `familia`, `especificacion_producto`) | |
+| `entidadId` | `String` (UUID) | ID de la fila auditada. |
+| `accion` | enum `AccionAuditoria` (`crear`, `modificar`, `eliminar`, `restaurar`) | Reusa el enum ya existente de `AuditoriaRegistro`. |
+| `snapshotAntes` | `JSONB?` | Estado previo (null en altas). |
+| `snapshotDespues` | `JSONB?` | Estado nuevo. |
+| `usuarioId` | FK → `Usuario`, `onDelete: Restrict` | |
+| `createdAt` | `DateTime` default `now()` | Índices: `(entidad, entidadId)` y `(usuarioId, createdAt)`. |
+
+**Deuda M1 (seguridad-analista):** append-only está garantizado solo a nivel aplicación (el código nunca hace `update`/`delete`), no a nivel motor — el rol de la app todavía tiene `UPDATE`/`DELETE`. Antes del circuito de exportación Arcor: `REVOKE` o triggers de bloqueo. Aplica igual a `AuditoriaRegistro`.
+
 ### enum TipoFormulario
 
 - Se agregó `trazabilidad_insumos`.
@@ -557,12 +680,18 @@ npm run db:import-productos -- [ruta-al-xlsx]
 
 ## Deuda técnica y decisiones pendientes (estado real, no aspiracional)
 
-- **Migrations formales: ya existen.** Desde la feature de Alta de Lote (ADR-011) el repo tiene `prisma/migrations/` versionadas (`20260713164001_init`, `20260713184453_add_lote_creado_por`, y desde ADR-012 `20260714120000_linea_producto_activo`) — **corrección respecto a una versión anterior de este documento**, que decía que no existían y que el schema se aplicaba con `db push`. Sigue sin haber política escrita de rollback/revisión de migraciones aplicadas; tratarlas como inmutables una vez mergeadas (no editar una migración ya aplicada — estándar global del proyecto).
+- **Migrations formales: ya existen.** Desde la feature de Alta de Lote (ADR-011) el repo tiene `prisma/migrations/` versionadas (`20260713164001_init`, `20260713184453_add_lote_creado_por`, `20260714120000_linea_producto_activo`, `20260720174244_secuencias_diarias_correlativos`, `20260721170200_maestro_admin_especificaciones`) — **corrección respecto a una versión anterior de este documento**, que decía que no existían y que el schema se aplicaba con `db push`. Sigue sin haber política escrita de rollback/revisión de migraciones aplicadas; tratarlas como inmutables una vez mergeadas (no editar una migración ya aplicada — estándar global del proyecto).
 - ~~Fallback demo embebido en la page, no gateado por `DEMO_MODE`.~~ **Resuelto (2026-07-20, `AUDIT_PLAN.md` Lote 1).** Ver ADR-007. Las tres instancias (`puntos-control/page.tsx`, `lotes/nuevo/page.tsx`, `[lineaId]/[puntoControlId]/page.tsx`) quedaron gateadas por `DEMO_MODE`.
-- **Rate limiting en `authorize()` de NextAuth (`src/lib/auth.ts`) y en `POST /api/v1/calidad/lotes`.** Señalado por `seguridad-analista` como hallazgo no bloqueante hoy, pero a resolver antes de exponer el login o el alta de lotes fuera de la red interna. El guard anti-abuso de ADR-012 (`producto-activo`) es puntual a ese endpoint, no la resolución de este punto transversal.
-- **Sin pantalla de administración del maestro.** Alta/edición de `Producto`/`Marca`/`Familia` hoy es exclusivamente vía el script de import — no hay UI ni API de escritura para estas entidades. (El alta de `Lote` sí tiene UI/API propia desde ADR-011; la activación de producto por línea desde ADR-012; el maestro de productos que los alimenta, no.)
-- **Sin auditoría append-only sobre `Producto`/`Marca`/`Familia`.** A diferencia de `registros_calidad` (que tiene `AuditoriaRegistro`) y de la activación de línea (que tiene `LineaActivacionLog`, ver ADR-012), cambios sobre el maestro no quedan trazados. No es HACCP-crítico hoy porque no hay UI de edición, pero pasa a serlo el día que exista.
+- **Rate limiting en `authorize()` de NextAuth (`src/lib/auth.ts`), en `POST /api/v1/calidad/lotes` y en los endpoints de escritura del maestro (ADR-015, deuda B1).** Señalado por `seguridad-analista` como hallazgo no bloqueante hoy, pero a resolver antes de exponer el login o la escritura fuera de la red interna. El guard anti-abuso de ADR-012 (`producto-activo`) es puntual a ese endpoint, no la resolución de este punto transversal.
+- ~~**Sin pantalla de administración del maestro.**~~ **Resuelto (2026-07-21, ADR-015).** Alta/edición de `Producto`/`Marca`/`Familia` ya tiene UI (`/calidad/maestro`) + API de escritura (`POST`/`PATCH /api/v1/calidad/maestro/...`, solo rol `admin`). El script de import sigue como vía de carga masiva.
+- ~~**Sin auditoría append-only sobre `Producto`/`Marca`/`Familia`.**~~ **Resuelto (2026-07-21, ADR-015).** Existe `auditoria_maestro` (append-only, cubre `Producto`/`Marca`/`Familia`/`EspecificacionProducto` con snapshot antes/después, en la misma transacción del cambio). **Caveat M1 (seguridad-analista):** el append-only está garantizado solo a nivel aplicación; a nivel motor el rol de la app todavía tiene `UPDATE`/`DELETE`. Antes del circuito de exportación Arcor: `REVOKE UPDATE, DELETE` o triggers de bloqueo (aplica igual a `AuditoriaRegistro`).
+- **Especificaciones de calidad por producto (ADR-015) — deuda residual no bloqueante:**
+  - **B1 (Bajo):** sin rate limiting en los endpoints de escritura del maestro (ver punto transversal arriba).
+  - **B2 (Bajo):** TOCTOU benigno en `verificarRefsProducto` — una ref borrada entre el `findUnique` y el `create` da un 500 (P2003) en vez de 404/409. Benigno hoy (no hay borrado de familia/marca/línea desde la app).
+  - **Dato pendiente del usuario:** falta la lista real de PCC del plan HACCP para marcar `esCritico` correctamente en las specs (hoy `false` por defecto en todas).
+  - **Diferido:** el flujo formal de tratamiento de desviación de PCC (acción correctiva + firma) — el modelo ya deja el lugar (`criticoMin/Max` + `esCritico`).
 - **Sin relación BOM (bill of materials) semielaborado → producto terminado.** El modelo sabe que TAPAS `esSemielaborado`, pero no hay forma de declarar "ALFAJOR NEGRO usa TAPAS como insumo" — necesario a futuro para trazabilidad completa de recall (insumo semielaborado → producto terminado) y para cálculo de consumo.
-- **Riesgo residual sobre `Lote.creadoPorId` (`onDelete: SetNull`)** si en el futuro se agrega borrado físico de `Usuario` — ver ADR-011. Hoy teórico (el borrado de usuarios es lógico, vía `activo`). Nota: las FK nuevas de ADR-012 (`LineaProduccionEstado`, `LineaActivacionLog`) se definieron `onDelete: Restrict` en vez de repetir este patrón, precisamente para no sumar un segundo punto con el mismo riesgo.
+- **Riesgo residual sobre `Lote.creadoPorId` (`onDelete: SetNull`)** si en el futuro se agrega borrado físico de `Usuario` — ver ADR-011. Hoy teórico (el borrado de usuarios es lógico, vía `activo`). Nota: las FK nuevas de ADR-012 (`LineaProduccionEstado`, `LineaActivacionLog`) y las de ADR-015 (`EspecificacionProducto`, `AuditoriaMaestro`) se definieron `onDelete: Restrict` en vez de repetir este patrón, precisamente para no sumar más puntos con el mismo riesgo.
 - **No se valida `producto.lineaProductivaId` contra la línea activada** en `POST /api/v1/lineas-productivas/[lineaId]/producto-activo` — ver deuda conocida de ADR-012. (El selector de UI ya filtra por línea desde 2026-07-14, pero la validación server-side sigue ausente — un POST directo puede activar un producto de otra línea.)
-- **Cero tests automatizados** en el repo, incluidas las features de Alta de Lote (ADR-011) y Producto activo por línea (ADR-012) — sin infraestructura de testing configurada todavía. **Corrección (ADR-013): esto ya no es preciso para todo el repo** — hay 63 tests en varias suites (`fecha-planta`, `lote-pt`, `lote.service`, `linea-producto-activo.service`, `getTurnoByHora`, `calidad.repository.lote-numero`), Vitest configurado desde 2026-07-15. Sigue faltando cobertura de componentes UI y de la mayoría del repository con DB real.
+- **Cero tests automatizados** en el repo — **corrección: ya no es preciso.** Vitest está configurado desde 2026-07-15; a la fecha de ADR-015 hay **99 tests** en varias suites (`fecha-planta`, `lote-pt`, `lote.service`, `linea-producto-activo.service`, `getTurnoByHora`, `calidad.repository.lote-numero`, `calidad.repository.secuencias`, `registro.service`, `especificaciones`, `maestro.service`). Sigue faltando cobertura de componentes UI y de la mayoría del repository con DB real.
+- ~~**Inconsistencia de numeración ADR-015 en el código.**~~ **Resuelto (2026-07-21):** los comentarios se corrigieron a ADR-015. Quedan a propósito dos "ADR-014": `prisma.ts` (referencia legítima al pooler) y el comentario del SQL de la migración aplicada (no se edita para preservar el checksum). Ver la nota al inicio de ADR-015.

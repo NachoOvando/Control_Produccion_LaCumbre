@@ -7,6 +7,7 @@ import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
 import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
+import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -306,13 +307,20 @@ export function TemperaturaForm({ puntoControlId, lineaProductivaId, tipoFormula
             const val = muestraActiva.campos[campo.key];
             const isActivo = campoActivo === campo.key;
             const tieneValor = val !== "";
+            // Spec del campo (si el producto activo tiene una cargada para este PC)
+            const spec = specDeCampo(productoActivo.especificaciones, campo.key);
+            const valNum = tieneValor ? parseFloat(val) : null;
             return (
               <button key={campo.key} type="button" onClick={() => setCampoActivo(campo.key)}
                 className={`rounded-xl border-2 p-3 text-left transition-all active:scale-95 ${isActivo ? "border-[#E1000F] bg-red-50 shadow-md" : tieneValor ? "border-green-300 bg-green-50" : "border-gray-200 bg-gray-50 hover:bg-gray-100"}`}>
                 <p className="text-xs text-gray-500 mb-0.5 leading-tight">
                   {campo.label} {campo.requerido && <span className="text-red-400">*</span>}
                 </p>
-                <p className={`text-xl font-bold font-mono ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>{val || "—"}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className={`text-xl font-bold font-mono ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>{val || "—"}</p>
+                  {spec && <IndicadorSpec valor={valNum} spec={spec} conTexto />}
+                </div>
+                {spec && <div className="mt-0.5"><RangoObjetivo spec={spec} /></div>}
               </button>
             );
           })}

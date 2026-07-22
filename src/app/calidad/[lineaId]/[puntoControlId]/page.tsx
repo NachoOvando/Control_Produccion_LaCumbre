@@ -8,8 +8,13 @@ import { ProduccionDiariaForm } from "@/components/calidad/ProduccionDiariaForm"
 import { TrazabilidadInsumosForm } from "@/components/calidad/TrazabilidadInsumosForm";
 import { RegistroGenericoForm } from "@/components/calidad/RegistroGenericoForm";
 import { getRelacionPuntoLinea, getProductoActivoDeLinea } from "@/db/calidad.repository";
+import { getEspecificacionesCaptura } from "@/db/maestro.repository";
 import { jornadaProductiva } from "@/lib/calidad/fecha-planta";
-import type { ProductoActivoLinea } from "@/types/calidad";
+import type { ProductoActivoLinea, EspecCampo } from "@/types/calidad";
+
+function dec(v: { toString(): string } | null): number | null {
+  return v == null ? null : Number(v.toString());
+}
 
 const TIPOS_PESO = new Set<string>(["peso_alfajor", "peso_relleno", "peso_bano"]);
 const TIPOS_TEMPERATURA = new Set<string>(["temperatura_condensacion", "temperatura_tanques"]);
@@ -121,6 +126,27 @@ export default async function RegistroPuntoControlPage({
           activadoPorNombre: estado.activadoPor.nombre,
           activadoEn: estado.activadoEn.toISOString(),
         };
+
+        // Specs vigentes del producto para este punto de control — habilitan la
+        // comparación en vivo en el formulario (ADR-015). Falla suave: si algo
+        // sale mal, el form simplemente no muestra rangos, no rompe la captura.
+        try {
+          const filas = await getEspecificacionesCaptura(estado.loteActivo.producto.id, puntoControlId);
+          productoActivo.especificaciones = filas.map<EspecCampo>(({ spec, binding }) => ({
+            campoData: binding.campoData,
+            agregacion: binding.agregacion,
+            parametroNombre: binding.parametro.nombre,
+            unidad: binding.parametro.unidad,
+            objetivo: dec(spec.objetivo),
+            aceptacionMin: dec(spec.aceptacionMin),
+            aceptacionMax: dec(spec.aceptacionMax),
+            criticoMin: dec(spec.criticoMin),
+            criticoMax: dec(spec.criticoMax),
+            esCritico: spec.esCritico,
+          }));
+        } catch (specErr) {
+          console.error("[calidad] No se pudieron cargar las especificaciones:", specErr);
+        }
       }
     }
   } catch (error) {

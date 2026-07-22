@@ -157,6 +157,8 @@ Devuelve el producto/lote activo de una línea **hoy** (en `America/Argentina/Co
 } }
 ```
 
+**Nota (desde ADR-015):** cuando este dato se resuelve en el Server Component de la grilla de puntos de control (no en este endpoint HTTP), `ProductoActivoLinea` incluye además `especificaciones: EspecCampo[]` — las specs de calidad vigentes del producto para el punto de control en contexto, usadas por los formularios para la comparación medido-vs-estándar en vivo. Este endpoint HTTP no las incluye (el selector de producto no las necesita).
+
 **Errores:**
 
 | Código HTTP | `code` | Significado |
@@ -195,6 +197,7 @@ El body **nunca** acepta `lineaProductivaId` (viene del path param), `activadoPo
 | 404 | `LINEA_NO_ENCONTRADA` | El `lineaId` del path no corresponde a ninguna `LineaProductiva`. |
 | 404 | `PRODUCTO_NO_ENCONTRADO` | El `productoId` no existe. |
 | 409 | `PRODUCTO_INACTIVO` | El producto existe pero `activo: false`. |
+| 409 | `PRODUCTO_SIN_VIDA_UTIL` | El producto no tiene `vidaUtilMeses` cargado (o es `<= 0`) — no se puede calcular el vencimiento del `numeroLote` (ver ADR-013). |
 | 429 | `ACTIVACION_MUY_FRECUENTE` | El mismo usuario activó algo en esta línea hace menos de 30 segundos (cooldown). Respuesta incluye header `Retry-After` (segundos). |
 | 429 | `LIMITE_ACTIVACIONES_EXCEDIDO` | El mismo usuario acumuló 5 o más activaciones en esta línea en los últimos 10 minutos. Respuesta incluye header `Retry-After` (segundos). |
 | 500 | `ERROR_INTERNO` | Error no esperado al activar (incluye fallas del find-or-create de `Lote`). |
@@ -203,12 +206,149 @@ El body **nunca** acepta `lineaProductivaId` (viene del path param), `activadoPo
 
 ---
 
-## Maestro de productos (Producto / Marca / Familia) — sin API de escritura todavía
+## Maestro de productos y especificaciones (Producto / Marca / Familia / EspecificacionProducto)
 
-No existe ningún endpoint bajo `/api/v1/` para **escribir** `Producto`, `Marca` o `Familia`. Hoy:
+Desde **ADR-015** (2026-07-21) existe un módulo de administración del maestro con endpoints de **escritura** para `Producto`, `Marca`, `Familia` y las especificaciones de calidad por producto.
 
-- Las **lecturas** que necesita el módulo Calidad (lotes activos con su producto, familia y marca; productos activos para el selector de Alta de Lote y para el selector de activación por línea) pasan por `src/db/calidad.repository.ts` (`getLotesActivos`, `getProductosActivos`), consumidas directamente desde Server Components — no hay ruta HTTP intermedia.
-- La **escritura** de `Producto`/`Marca`/`Familia` es exclusivamente vía el script `scripts/import-maestro-productos.ts` (`npm run db:import-productos`, ver `architecture.md`, sección "Operación — Import del maestro de productos"). No hay UI ni API para altas/ediciones manuales de estas tres entidades.
-- **Excepción, desde ADR-011:** `Lote` (que referencia a `Producto`) sí tiene alta manual vía UI + API — ver `POST /api/v1/calidad/lotes` arriba. Desde ADR-012, además, `Lote` se crea (o reutiliza) también a través de `POST /api/v1/lineas-productivas/{lineaId}/producto-activo`. `Lote` es la única entidad del maestro/producción con escritura habilitada desde la aplicación hasta ahora — `Producto`, `Marca` y `Familia` en sí mismos siguen sin API de escritura.
+**Alcance y patrón (importante):**
 
-Esto es un hueco de documentación consistente con un hueco real de funcionalidad (ver "Deuda técnica y decisiones pendientes" en `architecture.md`): si se construye una pantalla de administración del maestro, esta sección se actualiza con los endpoints correspondientes.
+- Solo hay **7 endpoints de escritura** (POST/PATCH). **No hay GET HTTP** de estas entidades: las lecturas del módulo admin y de la captura (catálogo de productos/marcas/familias, specs vigentes, bindings) se resuelven en **Server Components** vía `src/db/maestro.repository.ts` (`getProductosMaestro`, `getMarcas`, `getFamilias`, `getParametros`, `getBindings`, `getEspecificacionesVigentesDeProducto`, `getTodasEspecificacionesVigentes`, `getEspecificacionesCaptura`, `getHistorialEspecificacion`) — mismo criterio que el resto del repo, sin ruta HTTP intermedia para lectura.
+- **Todos los endpoints requieren rol `admin`** (constante `ROLES_ADMIN_MAESTRO` en `src/lib/auth/roles.ts`, compartida por las 7 rutas vía el gate común `src/lib/calidad/maestro-http.ts`). El maestro es configuración crítica de trazabilidad de exportación → solo `admin` edita; el resto de roles solo consulta (vía Server Component).
+- Los `Parametro` (catálogo cerrado de parámetros especificables) y los `PuntoControlParametro` (bindings parámetro↔campo de `data`) **no tienen endpoint de escritura**: se siembran en el seed como estructura derivada de los `schema_json`, no son dato de negocio editable por el admin.
+
+**Códigos de error transversales a los 7 endpoints:**
+
+| Código HTTP | `code` | Significado |
+|---|---|---|
+| 400 | `JSON_INVALIDO` | El body no es JSON parseable. |
+| 400 | `VALIDACION_ESTRUCTURA` | El body no cumple el schema Zod (`details` trae la lista de campos/mensajes inválidos). |
+| 401 | `NO_AUTORIZADO` | Sin sesión. |
+| 403 | `ROL_INSUFICIENTE` | Sesión válida pero el rol no es `admin`. |
+| 409 | `DUPLICADO` | Choca con un valor único (`nombre`/`sku`/`slug` ya existente). |
+| 500 | `ERROR_INTERNO` | Error no esperado (los detalles se loguean server-side, no se filtran al cliente). |
+
+Cada endpoint agrega sus códigos específicos abajo.
+
+---
+
+### POST /api/v1/calidad/maestro/productos
+
+Alta de producto. Auditada en `auditoria_maestro` (append-only) dentro de la misma transacción.
+
+**Body** (validado por Zod; numéricos no negativos y nullable salvo donde se indique):
+
+| Campo | Tipo | Obligatorio | Notas |
+|---|---|---|---|
+| `nombre` | `string` (máx. 300) | Sí | Descripción estándar completa — clave única. |
+| `familiaId` | `string` (UUID) | Sí | |
+| `marcaId` | `string` (UUID) | Sí | |
+| `sku` | `string` (máx. 60) \| `null` | No | No se inventa código; `null` explícito válido. |
+| `lineaProductivaId` | `string` (UUID) \| `null` | No | |
+| `gusto` | `string` \| `null` | No | |
+| `pesoGramos`, `unidadesPorCaja`, `rendimientoTeorico`, `pesoMasaCrudaG` | `number` (≥ 0) \| `null` | No | |
+| `unidadRendimiento` | `"unidades_hora"` \| `"cajas_amasijo"` \| `null` | No | |
+| `cajasPorPallet` | `int` (≥ 0) \| `null` | No | |
+| `vidaUtilMeses` | `int` (> 0) \| `null` | No | Positivo estricto (ver bloqueo de activación, ADR-013). |
+| `esSemielaborado` | `boolean` | No | |
+| `observaciones` | `string` (máx. 2000) \| `null` | No | |
+| `activo` | `boolean` | No | |
+
+**Respuesta éxito:** `201 { data: Producto }`.
+
+**Errores específicos:** `404 FAMILIA_NO_ENCONTRADA`, `404 MARCA_NO_ENCONTRADA`, `404 LINEA_NO_ENCONTRADA` (cualquier ref del body que no exista — se verifica antes de escribir). `409 DUPLICADO` (nombre/sku ya usado).
+
+---
+
+### PATCH /api/v1/calidad/maestro/productos/{id}
+
+Edición parcial de producto (todos los campos del POST son opcionales acá). Audita snapshot antes/después.
+
+| Param | Tipo | Obligatorio |
+|---|---|---|
+| `id` | UUID (path) | Sí |
+
+**Respuesta éxito:** `200 { data: Producto }`.
+
+**Errores específicos:** `400 VALIDACION_ESTRUCTURA` (si `id` no es UUID), `404 NO_ENCONTRADO` (el producto no existe), `404 FAMILIA_NO_ENCONTRADA` / `404 MARCA_NO_ENCONTRADA` / `404 LINEA_NO_ENCONTRADA` (solo se verifican las refs que vengan en el payload), `409 DUPLICADO`.
+
+---
+
+### POST /api/v1/calidad/maestro/marcas
+
+Alta de marca. Auditada.
+
+| Campo | Tipo | Obligatorio | Notas |
+|---|---|---|---|
+| `nombre` | `string` (máx. 120) | Sí | Único. |
+| `lineaNegocio` | `"marca_propia"` \| `"copacker_arcor"` \| `"fason_terceros"` | Sí | Define la línea de negocio del producto (ver ADR-010). |
+
+**Respuesta éxito:** `201 { data: Marca }`. **Errores específicos:** `409 DUPLICADO`.
+
+---
+
+### PATCH /api/v1/calidad/maestro/marcas/{id}
+
+Edición parcial (`nombre?`, `lineaNegocio?`, `activa?`). Audita snapshot antes/después.
+
+| Param | Tipo | Obligatorio |
+|---|---|---|
+| `id` | UUID (path) | Sí |
+
+**Respuesta éxito:** `200 { data: Marca }`. **Errores específicos:** `400 VALIDACION_ESTRUCTURA` (id no UUID), `404 NO_ENCONTRADO`, `409 DUPLICADO`.
+
+---
+
+### POST /api/v1/calidad/maestro/familias
+
+Alta de familia. Auditada.
+
+| Campo | Tipo | Obligatorio | Notas |
+|---|---|---|---|
+| `slug` | `string` (máx. 60) | Sí | Solo minúsculas, números y guión bajo (`^[a-z0-9_]+$`). Clave de UI y dispatch de formularios. |
+| `nombre` | `string` (máx. 120) | Sí | Único. |
+
+**Respuesta éxito:** `201 { data: Familia }`. **Errores específicos:** `409 DUPLICADO`.
+
+---
+
+### PATCH /api/v1/calidad/maestro/familias/{id}
+
+Edición parcial (`slug?`, `nombre?`, `activa?`). Audita snapshot antes/después.
+
+| Param | Tipo | Obligatorio |
+|---|---|---|
+| `id` | UUID (path) | Sí |
+
+**Respuesta éxito:** `200 { data: Familia }`. **Errores específicos:** `400 VALIDACION_ESTRUCTURA` (id no UUID), `404 NO_ENCONTRADO`, `409 DUPLICADO`.
+
+---
+
+### POST /api/v1/calidad/maestro/especificaciones
+
+Crea o **versiona** una especificación de calidad para un `(producto × punto de control × parámetro)`. Editar **no pisa**: cierra la versión vigente (`vigenteHasta = T`) y abre una nueva (`vigenteDesde = T`, `version + 1`) en la misma transacción y con el mismo timestamp. Todo append-only, auditado en `auditoria_maestro`. Ver ADR-015.
+
+**Body:**
+
+| Campo | Tipo | Obligatorio | Notas |
+|---|---|---|---|
+| `productoId` | `string` (UUID) | Sí | |
+| `puntoControlId` | `string` (UUID) | Sí | |
+| `parametroId` | `string` (UUID) | Sí | |
+| `objetivo` | `number` \| `null` | No | Valor objetivo. |
+| `aceptacionMin`, `aceptacionMax` | `number` \| `null` | No | Rango operativo/de calidad (min y max independientes). |
+| `criticoMin`, `criticoMax` | `number` \| `null` | No | Límite de inocuidad/PCC (envolvente externo). |
+| `esCritico` | `boolean` (default `false`) | No | Marca PCC. |
+
+**Reglas de validación (Zod `superRefine`):** al menos un objetivo o límite; `min <= max` en cada par; el rango de aceptación queda **dentro** del crítico (`criticoMin <= aceptacionMin`, `aceptacionMax <= criticoMax`); el objetivo queda **dentro** del rango de aceptación. Violarlas → `400 VALIDACION_ESTRUCTURA`.
+
+**Respuesta éxito:** `201 { data: EspecificacionProducto }` (la versión nueva, vigente).
+
+**Errores específicos:**
+
+| Código HTTP | `code` | Significado |
+|---|---|---|
+| 404 | `PRODUCTO_NO_ENCONTRADO` | El `productoId` no existe. |
+| 409 | `BINDING_INEXISTENTE` | No hay binding `(puntoControl × parámetro)`: ese parámetro no es medible en ese punto de control, así que no puede tener spec ahí. |
+| 409 | `CONFLICTO_CONCURRENCIA` | Dos versionados concurrentes de la misma spec chocaron contra el índice único parcial de "una sola vigente" (carrera benigna — el cliente reintenta/refresca). |
+
+**Nota:** no hay endpoint de baja de spec vía HTTP. El repository tiene `cerrarEspecificacion` (cierra la vigente sin abrir otra, dejando el par sin spec vigente), pero hoy no está expuesto por ningún endpoint.

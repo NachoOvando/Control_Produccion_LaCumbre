@@ -7,6 +7,7 @@ import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { RegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
+import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -178,6 +179,10 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
   const muestraActivaIdx = muestras.findIndex((m) => m.id === muestraActivaId);
 
   const stats = useMemo(() => calcularStats(muestraActiva.mediciones), [muestraActiva.mediciones]);
+
+  // Spec de calidad del peso medido (campo "mediciones"), si el producto la tiene
+  // cargada para este punto de control — habilita la marca en vivo por celda.
+  const specMediciones = specDeCampo(productoActivo.especificaciones, "mediciones");
 
   // Resumen de jornada — solo peso_bano: promedio del baño por muestras apareadas
   const resumenBano = useMemo(
@@ -546,6 +551,8 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-bold text-gray-700">
             Mediciones — Muestra {muestraActiva.id}
+            {/* Cada peso se compara contra la misma spec del producto (array_cada) */}
+            {specMediciones && <span className="ml-2"><RangoObjetivo spec={specMediciones} /></span>}
           </h2>
           <span className="text-xs text-gray-400 font-medium">
             {muestraActiva.mediciones.filter((v) => v !== "").length}/12 completadas
@@ -556,6 +563,7 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
           {muestraActiva.mediciones.map((val, idx) => {
             const isActivo = campoActivo?.origen === "medicion" && campoActivo.idx === idx;
             const tieneValor = val !== "";
+            const valNum = tieneValor ? parseFloat(val) : null;
 
             return (
               <button
@@ -572,7 +580,10 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
                   }
                 `}
               >
-                <span className="text-xs font-bold text-gray-400">P{idx + 1}</span>
+                <span className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-400">P{idx + 1}</span>
+                  {specMediciones && <IndicadorSpec valor={valNum} spec={specMediciones} />}
+                </span>
                 <span className={`text-base font-bold font-mono leading-tight ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>
                   {val || "—"}
                 </span>
