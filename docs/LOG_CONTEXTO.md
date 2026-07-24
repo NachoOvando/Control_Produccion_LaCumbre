@@ -6,6 +6,18 @@
 
 ---
 
+### [2026-07-24] - Bug crítico transversal: AJV rechazaba valores decimales válidos por precisión de floats (`multipleOf: 0.1`)
+
+- **Contexto:** el usuario reportó `400 Bad Request` en "Control Temperatura Condensación Túnel" ("2 registro(s) con datos inválidos"). El body del error mostraba `"Campo 'peso': must be multiple of 0.1, Campo 'temp_ambiente': must be multiple of 0.1"` para valores perfectamente normales (75.3, 18.2).
+- **Causa raíz (transversal, no específica de este punto de control):** AJV valida `multipleOf` comparando `valor / divisor` contra un entero exacto. En floats de JS, `75.3 / 0.1 = 752.9999999999999` (no 753) — un valor válido de 1 decimal falla la comparación exacta por ruido de representación binaria. **`multipleOf: 0.1` está en casi todos los schemas del maestro** (pesos, temperaturas, humedad — al menos 25 campos en `prisma/seed.ts`), así que este bug podía estar afectando guardados en múltiples formularios, no solo uno. AJV soporta `multipleOfPrecision` para tolerar este ruido (`Math.abs(Math.round(res) - res) > 1e-{precision}` en vez de comparación exacta), pero `src/lib/validate-jsonb.ts` no lo tenía seteado.
+- **Fix:** `new Ajv({ ..., multipleOfPrecision: 9 })` en `validate-jsonb.ts` — un solo lugar, corrige el problema para **todos** los schemas del sistema de una vez (no hace falta tocar cada `schema_json` individualmente, y no requiere ningún cambio en la DB). Se agregó `validate-jsonb.test.ts`: confirma que 75.3/18.2/60.2 ahora validan, que un valor genuinamente no-múltiplo (75.35) sigue siendo rechazado, y que errores de tipo no relacionados siguen detectándose.
+- **Verificado end-to-end en browser** (server reiniciado con `.next` limpio para descartar caché): guardado real en Temperatura Condensación con los 8 campos decimales → `201 Created`. Registro de prueba + auditoría borrados después (mismo criterio que el hito anterior: entorno de prueba, verificado antes de borrar que era el único).
+- **Nota:** el hito anterior del mismo día (Producción Diaria, patrón de fecha `vencimiento_pt` mal copiado) es un bug distinto y ya cerrado — no relacionado con este.
+- Cambio técnico puro (configuración de la librería de validación), sin cadena de subagentes.
+- Typecheck + 110 tests verdes.
+
+---
+
 ### [2026-07-24] - Bug crítico corregido: Producción Diaria nunca guardó un registro (0 filas desde siempre)
 
 - **Contexto:** el usuario reportó `400 Bad Request` al guardar en Producción Diaria — Línea 3 ("3 registro(s) con datos inválidos" en el card de error).
