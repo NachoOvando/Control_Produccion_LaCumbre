@@ -5,7 +5,7 @@
 > pensando ahora, cuál es el próximo paso concreto, y qué está bloqueado.
 > Actualizalo al cerrar cada sesión, antes de cortar.
 
-**Última actualización:** 21/07/2026
+**Última actualización:** 24/07/2026
 
 ## Enfoque actual
 Recién cerrado (cadena completa scm-alimentos → arquitecto-industrial →
@@ -22,6 +22,22 @@ para familias que no son Alfajor Negro. Documentado como **ADR-016** en
 `docs/architecture.md` (mismo día que ADR-015).
 
 ## Próximo paso
+0. **Revisar carga de datos en el resto de los formularios de Calidad**
+   (pendiente, 2026-07-24). Se cerraron dos bugs de guardado el mismo día:
+   fecha `vencimiento_pt` mal formateada en Producción Diaria (commit
+   `9fed382`) y, más importante, un bug **transversal** de AJV que
+   rechazaba valores decimales válidos por precisión de floats
+   (`multipleOf: 0.1` sin tolerancia — commit `3950865`, fix en
+   `validate-jsonb.ts`, afecta potencialmente a los ~25 campos decimales
+   de casi todos los `schema_json`). El segundo fix corrige todos los
+   formularios de una sola vez sin tocar la DB, pero **no se probó
+   guardado real en cada punto de control** — solo en Producción Diaria y
+   Temperatura Condensación (los dos donde el usuario reportó el error).
+   Falta confirmar en browser (guardado real, no solo lectura) que Peso
+   Alfajor, Peso Relleno, Peso Tapas, Temperatura Tanques, Detector de
+   Metales, Defectos de Conformado y Trazabilidad Insumos también guardan
+   sin 400 — especialmente los que tienen campos decimales de 1 o 2
+   decimales (`multipleOf: 0.1`/`0.01`).
 1. **Cargar `Producto.vidaUtilMeses` de TAPAS** desde `/calidad/maestro` —
    hoy bloquea la activación de TAPAS en Línea 3 con `409
    PRODUCTO_SIN_VIDA_UTIL` (ADR-013). Es de los 9/104 productos del
