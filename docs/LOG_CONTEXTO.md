@@ -6,6 +6,18 @@
 
 ---
 
+### [2026-07-24] - Bug crítico corregido: Producción Diaria nunca guardó un registro (0 filas desde siempre)
+
+- **Contexto:** el usuario reportó `400 Bad Request` al guardar en Producción Diaria — Línea 3 ("3 registro(s) con datos inválidos" en el card de error).
+- **Causa raíz:** el JSON Schema de `produccion_diaria` (`prisma/seed.ts`) validaba `vencimiento_pt` contra el patrón `^\d{2}/\d{2}/\d{2}$` (formato DD/MM/AA) — copiado sin ajustar del schema de `fechado_envase` (otro campo, otro formato). Pero `calcularVencimiento()` (`src/lib/calidad/lote-pt.ts`) siempre generó `MM/AAAA` (ej. `"11/2026"`), que nunca matchea ese patrón. **Confirmado en DB: 0 filas en `registros_calidad` para este punto de control desde que existe la feature** — todo guardado falló silenciosamente (mismo patrón que el bug de TAPAS del 2026-07-21, otra vez un mismatch entre el payload real y el `schema_json`).
+- **Fix:** patrón corregido a `^\d{2}/\d{4}$` en `prisma/seed.ts` (fuente de verdad) + `UPDATE` puntual sobre el `schema_json` del `PuntoControl` en la DB real (no se re-corrió el seed completo — evita el `deleteMany` de `puntoControlLinea`/`puntoControlFamilia` que no correspondía a este fix).
+- **Verificado sin tocar datos reales primero**: script aislado con AJV que reprodujo el rechazo con el patrón viejo y confirmó la aceptación con el nuevo, antes de tocar la DB.
+- **Verificado end-to-end en browser** (con permiso explícito del usuario, entorno de prueba): guardado real → `201 Created`. El registro y su entrada de auditoría se borraron después a pedido del usuario ("estamos en instancias de prueba") — excepción puntual a la regla de no-borrado físico de HACCP, aplicada solo a un registro de prueba propio, verificado antes de borrar que era el único y sin otras referencias.
+- Cambio técnico puro (regex mal copiado), sin cadena de subagentes — no es regla de negocio ni cambio estructural.
+- Typecheck + 107 tests verdes.
+
+---
+
 ### [2026-07-22] - Maestro de Productos promovido a módulo top-level (hermano de Calidad)
 
 - **Contexto:** el usuario indicó que el Maestro de Productos corresponde al mismo nivel jerárquico que el módulo Calidad, no anidado dentro de él. Es dato maestro transversal (lo consume Calidad, pero no es una función de Calidad).

@@ -520,8 +520,14 @@ const schemaProduccionDiaria = {
     },
     vencimiento_pt: {
       type: "string",
-      pattern: "^\\d{2}/\\d{2}/\\d{2}$",
-      description: "Fecha de vencimiento del lote PT en formato DD/MM/AA",
+      // MM/AAAA (mes + año a 4 dígitos) — es lo que produce calcularVencimiento()
+      // en src/lib/calidad/lote-pt.ts. El patrón DD/MM/AA que había acá era copia
+      // del schema de fechado_envase (otro campo, otro formato) — nunca coincidió
+      // con el valor real que manda el formulario, así que TODO guardado de
+      // Producción Diaria fallaba con 400 desde que existe esta feature (0 filas
+      // en producción, confirmado en DB). Ver hito de bug crítico en LOG_CONTEXTO.md.
+      pattern: "^\\d{2}/\\d{4}$",
+      description: "Fecha de vencimiento del lote PT en formato MM/AAAA",
     },
     peso_alfajor: {
       type: "number",
