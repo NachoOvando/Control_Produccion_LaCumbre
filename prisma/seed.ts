@@ -640,7 +640,19 @@ const schemaInspeccionMasa = {
 async function main() {
   console.log("🌱 Iniciando seed — La Cumbre Control de Producción...\n");
 
-  const passwordHash = await bcrypt.hash("password123", 12);
+  // C1 (AUDITORIA_FLUJOS_DATOS.md, veto de seguridad-analista): el seed NUNCA
+  // inventa contraseñas — las 6 cuentas (2 admin) se crean con la misma
+  // passphrase, provista por variable de entorno. Fail-fast si falta, mismo
+  // criterio que src/lib/prisma.ts con DATABASE_URL: mejor que el seed no
+  // corra, a que corra con una contraseña previsible/literal del repo.
+  const seedPassword = process.env.SEED_USER_PASSWORD;
+  if (!seedPassword) {
+    throw new Error(
+      "SEED_USER_PASSWORD no está definida — el seed no inventa contraseñas. " +
+        "Definila en .env.local (ver .env.example) antes de correr `npm run db:seed`."
+    );
+  }
+  const passwordHash = await bcrypt.hash(seedPassword, 12);
 
   // ── Turnos ─────────────────────────────────────────────────────────────────
   await Promise.all([
@@ -667,7 +679,7 @@ async function main() {
     prisma.usuario.upsert({
       where: { email: "iovando@lacumbre.com.ar" },
       update: {},
-      create: { email: "iovando@lacumbre.com.ar", nombre: "Ignacio Ovando", password: await bcrypt.hash("lacumbre", 12), rol: Rol.admin },
+      create: { email: "iovando@lacumbre.com.ar", nombre: "Ignacio Ovando", password: passwordHash, rol: Rol.admin },
     }),
     prisma.usuario.upsert({
       where: { email: "admin@lacumbre.com.ar" },
@@ -1048,11 +1060,8 @@ async function main() {
 
   // ── Resumen ────────────────────────────────────────────────────────────────
   console.log("\n🎉 Seed completado\n");
-  console.log("📧 Credenciales:");
-  console.log("   iovando@lacumbre.com.ar       / lacumbre     (admin)");
-  console.log("   admin@lacumbre.com.ar          / password123  (admin)");
-  console.log("   supervisor.calidad@lacumbre... / password123  (supervisor)");
-  console.log("   operador.calidad@lacumbre...   / password123  (operador)");
+  console.log("📧 Credenciales — las 6 cuentas comparten la contraseña de SEED_USER_PASSWORD (nunca impresa acá):");
+  console.log("   iovando@lacumbre.com.ar / admin@lacumbre.com.ar / supervisor.calidad@... / operador.calidad@... / jefe.planta@... / gerencia@...");
   console.log("\n🏭 Línea 3 — 10 puntos de control cargados (Peso Baño Alfajor y Peso Tapas son mutuamente excluyentes por familia, se ve 1 de los 2 a la vez)");
 
   void admin; // evitar unused warning
