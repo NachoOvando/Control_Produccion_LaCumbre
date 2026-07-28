@@ -1,8 +1,7 @@
 "use client";
 import { hoyPlanta, horaPlanta } from "@/lib/calidad/fecha-planta";
 
-import { useState, useCallback, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { RegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
@@ -10,6 +9,9 @@ import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner"
 import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
 import { evaluarValor } from "@/lib/calidad/especificaciones";
 import { calcularCoberturaPorObservacion } from "@/lib/calidad/peso-cobertura";
+import { useBatchGuardar } from "@/hooks/useBatchGuardar";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -163,22 +165,34 @@ export function PesoMedicionesForm(props: Props) {
 }
 
 function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFormulario, productoActivo }: Props) {
-  const router = useRouter();
   const { data: session } = useSession();
 
   const config = CONFIG[tipoFormulario];
   const tipoDefault = config.tipoOpciones[0].valor;
 
   const loteId = productoActivo.loteId;
-  const [muestras, setMuestras] = useState<MuestraPeso[]>([crearMuestraVacia(1, tipoDefault)]);
-  const [muestraActivaId, setMuestraActivaId] = useState(1);
+  const storageKey = claveProgresoMuestras({ lineaProductivaId, loteId, puntoControlId });
+  const [muestras, setMuestras, limpiarProgreso] = usePersistedState<MuestraPeso[]>(
+    storageKey,
+    () => [crearMuestraVacia(1, tipoDefault)]
+  );
+  const [muestraActivaId, setMuestraActivaId] = useState(
+    () => muestras[muestras.length - 1]?.id ?? 1
+  );
   const [campoActivo, setCampoActivo] = useState<CampoNumpad | null>(null);
-  const [enviando, setEnviando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [exito, setExito] = useState(false);
+  const [errorValidacion, setErrorValidacion] = useState<string | null>(null);
+  const redirectTo = `/calidad/puntos-control?linea=${lineaProductivaId}`;
+  const { enviando, error, exito, guardar: guardarBatch } = useBatchGuardar(redirectTo, limpiarProgreso);
 
   const muestraActiva = muestras.find((m) => m.id === muestraActivaId)!;
   const muestraActivaIdx = muestras.findIndex((m) => m.id === muestraActivaId);
+
+  // Contador de IDs independiente del ciclo de render — ver TemperaturaForm.tsx
+  // para el razonamiento completo (evita colisión de id ante doble-tap en "+ Muestra").
+  const nextMuestraIdRef = useRef<number | null>(null);
+  if (nextMuestraIdRef.current === null) {
+    nextMuestraIdRef.current = Math.max(0, ...muestras.map((m) => m.id)) + 1;
+  }
 
   const stats = useMemo(() => calcularStats(muestraActiva.mediciones), [muestraActiva.mediciones]);
 
@@ -240,7 +254,7 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
   }, [campoActivo]);
 
   const agregarMuestra = () => {
-    const nuevoId = Math.max(...muestras.map((m) => m.id)) + 1;
+    const nuevoId = nextMuestraIdRef.current!++;
     const nueva = crearMuestraVacia(nuevoId, muestraActiva.tipo);
     nueva.hora = horaPlanta();
     setMuestras((prev) => [...prev, nueva]);
@@ -283,20 +297,23 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
     for (const muestra of muestras) {
       const vacias = muestra.mediciones.filter((v) => v === "").length;
       if (vacias > 0) {
-        setError(`Muestra ${muestra.id}: faltan ${vacias} medición(es) de 12`);
+        setErrorValidacion(`Muestra ${muestra.id}: faltan ${vacias} medición(es) de 12`);
         return;
       }
       if (tipoFormulario === "peso_bano") {
-        if (!muestra.temp_ambiente) { setError(`Muestra ${muestra.id}: falta T° ambiente`); return; }
-        if (!muestra.temp_bano) { setError(`Muestra ${muestra.id}: falta T° baño`); return; }
+        if (!muestra.temp_ambiente) { setErrorValidacion(`Muestra ${muestra.id}: falta T° ambiente`); return; }
+        if (!muestra.temp_bano) { setErrorValidacion(`Muestra ${muestra.id}: falta T° baño`); return; }
         // Escurrimiento es opcional: no se mide en cada muestra en la práctica
         // de planta (confirmado por scm-alimentos, 2026-07-21). Se envía si
         // el operario lo cargó (ver construirData), sin bloquear el guardado.
       }
       if (tipoFormulario === "peso_relleno" && muestra.tipo === "otros" && !muestra.tipo_relleno_otro.trim()) {
-        setError(`Muestra ${muestra.id}: aclará qué relleno es en el campo debajo de "Otros"`); return;
+        setErrorValidacion(`Muestra ${muestra.id}: aclará qué relleno es en el campo debajo de "Otros"`); return;
       }
     }
+    setErrorValidacion(null);
+
+    if (!window.confirm("Vas a guardar la jornada y salir de este punto de control. ¿Confirmás?")) return;
 
     const hoy = hoyPlanta();
 
@@ -311,25 +328,8 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
       data: construirData(muestra),
     }));
 
-    setEnviando(true);
-    setError(null);
     setCampoActivo(null);
-
-    try {
-      const res = await fetch("/api/v1/calidad/registros/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(registros),
-      });
-      const json = await res.json();
-      if (!res.ok) { setError(json.error ?? "Error al guardar los registros."); return; }
-      setExito(true);
-      setTimeout(() => router.push(`/calidad/puntos-control?linea=${lineaProductivaId}`), 2000);
-    } catch {
-      setError("Error de conexión. Verificá la red e intentá nuevamente.");
-    } finally {
-      setEnviando(false);
-    }
+    await guardarBatch(registros);
   };
 
   // ─── Pantalla de éxito ───────────────────────────────────────────────────
@@ -657,9 +657,9 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
       )}
 
       {/* Error */}
-      {error && (
+      {(errorValidacion ?? error) && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
-          {error}
+          {errorValidacion ?? error}
         </div>
       )}
 
@@ -767,19 +767,31 @@ function crearMuestraTapa(id: number): MuestraTapa {
 function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo }: {
   puntoControlId: string; lineaProductivaId: string; productoActivo: ProductoActivoLinea;
 }) {
-  const router = useRouter();
   const { data: session } = useSession();
 
   const loteId = productoActivo.loteId;
-  const [muestras, setMuestras] = useState<MuestraTapa[]>([crearMuestraTapa(1)]);
-  const [muestraActivaId, setMuestraActivaId] = useState(1);
+  const storageKey = claveProgresoMuestras({ lineaProductivaId, loteId, puntoControlId });
+  const [muestras, setMuestras, limpiarProgreso] = usePersistedState<MuestraTapa[]>(
+    storageKey,
+    () => [crearMuestraTapa(1)]
+  );
+  const [muestraActivaId, setMuestraActivaId] = useState(
+    () => muestras[muestras.length - 1]?.id ?? 1
+  );
   const [campoActivo, setCampoActivo] = useState<CampoTapa | null>(null);
-  const [enviando, setEnviando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [exito, setExito] = useState(false);
+  const [errorValidacion, setErrorValidacion] = useState<string | null>(null);
+  const redirectTo = `/calidad/puntos-control?linea=${lineaProductivaId}`;
+  const { enviando, error, exito, guardar: guardarBatch } = useBatchGuardar(redirectTo, limpiarProgreso);
 
   const muestraActiva = muestras.find((m) => m.id === muestraActivaId)!;
   const muestraActivaIdx = muestras.findIndex((m) => m.id === muestraActivaId);
+
+  // Contador de IDs independiente del ciclo de render — ver TemperaturaForm.tsx
+  // para el razonamiento completo (evita colisión de id ante doble-tap en "+ Muestra").
+  const nextMuestraIdRef = useRef<number | null>(null);
+  if (nextMuestraIdRef.current === null) {
+    nextMuestraIdRef.current = Math.max(0, ...muestras.map((m) => m.id)) + 1;
+  }
 
   // Cobertura calculada en vivo por resta apareada (con baño − sin bañar), pico
   // a pico — NO se tipea a mano (corrige el diseño anterior con 3 filas).
@@ -881,7 +893,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
   }, [campoActivo]);
 
   const agregarMuestra = () => {
-    const nuevoId = Math.max(...muestras.map((m) => m.id)) + 1;
+    const nuevoId = nextMuestraIdRef.current!++;
     setMuestras((prev) => [...prev, crearMuestraTapa(nuevoId)]);
     setMuestraActivaId(nuevoId);
     setCampoActivo(null);
@@ -899,12 +911,15 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
     for (const m of muestras) {
       for (const fila of FILAS_TAPA) {
         const vacias = filaTapaKey(fila.key, m).filter((v) => v === "").length;
-        if (vacias > 0) { setError(`M${m.id} — ${fila.label}: faltan ${vacias} medición(es)`); return; }
+        if (vacias > 0) { setErrorValidacion(`M${m.id} — ${fila.label}: faltan ${vacias} medición(es)`); return; }
       }
-      if (!m.temp_ambiente) { setError(`M${m.id}: falta T° ambiente`); return; }
-      if (!m.temp_bano) { setError(`M${m.id}: falta T° baño`); return; }
+      if (!m.temp_ambiente) { setErrorValidacion(`M${m.id}: falta T° ambiente`); return; }
+      if (!m.temp_bano) { setErrorValidacion(`M${m.id}: falta T° baño`); return; }
       // Escurrimiento opcional (confirmado por scm-alimentos, 2026-07-21).
     }
+    setErrorValidacion(null);
+
+    if (!window.confirm("Vas a guardar la jornada y salir de este punto de control. ¿Confirmás?")) return;
 
     const hoy = hoyPlanta();
     const registros = muestras.map((m, idx) => {
@@ -929,20 +944,8 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
       };
     });
 
-    setEnviando(true); setError(null); setCampoActivo(null);
-    try {
-      const res = await fetch("/api/v1/calidad/registros/batch", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(registros),
-      });
-      const json = await res.json();
-      if (!res.ok) { setError(json.error ?? "Error al guardar."); return; }
-      setExito(true);
-      setTimeout(() => router.push(`/calidad/puntos-control?linea=${lineaProductivaId}`), 2000);
-    } catch {
-      setError("Error de conexión. Verificá la red e intentá nuevamente.");
-    } finally {
-      setEnviando(false);
-    }
+    setCampoActivo(null);
+    await guardarBatch(registros);
   };
 
   if (exito) return (
@@ -1149,7 +1152,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
           className="w-full py-2.5 px-3 rounded-xl border-2 border-gray-200 bg-gray-50 text-sm text-gray-900 focus:border-[#E1000F] focus:outline-none resize-none" />
       </div>
 
-      {error && <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">{error}</div>}
+      {(errorValidacion ?? error) && <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">{errorValidacion ?? error}</div>}
 
       {/* Registros ya cargados hoy */}
       <div onClick={(e) => e.stopPropagation()}>

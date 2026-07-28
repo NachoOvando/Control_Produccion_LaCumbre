@@ -1,10 +1,12 @@
 "use client";
 import { hoyPlanta, horaPlanta } from "@/lib/calidad/fecha-planta";
 
-import { useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
+import { useBatchGuardar } from "@/hooks/useBatchGuardar";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 // ------- Tipos ------- //
@@ -305,19 +307,30 @@ function MuestraTab({
 // ------- Formulario principal ------- //
 
 export function DefectosConformadoForm({ puntoControlId, lineaProductivaId, productoActivo }: Props) {
-  const router = useRouter();
   const { data: session } = useSession();
 
   // Estado del formulario
   const loteId = productoActivo.loteId;
-  const [muestras, setMuestras] = useState<MuestraData[]>([crearMuestraVacia(1)]);
-  const [muestraActivaId, setMuestraActivaId] = useState(1);
-  const [enviando, setEnviando] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [exito, setExito] = useState(false);
+  const storageKey = claveProgresoMuestras({ lineaProductivaId, loteId, puntoControlId });
+  const [muestras, setMuestras, limpiarProgreso] = usePersistedState<MuestraData[]>(
+    storageKey,
+    () => [crearMuestraVacia(1)]
+  );
+  const [muestraActivaId, setMuestraActivaId] = useState(
+    () => muestras[muestras.length - 1]?.id ?? 1
+  );
+  const [errorValidacion, setErrorValidacion] = useState<string | null>(null);
+  const { enviando, error, exito, guardar: guardarBatch } = useBatchGuardar("/calidad", limpiarProgreso);
 
   const muestraActiva = muestras.find((m) => m.id === muestraActivaId)!;
   const muestraActivaIdx = muestras.findIndex((m) => m.id === muestraActivaId);
+
+  // Contador de IDs independiente del ciclo de render — ver TemperaturaForm.tsx
+  // para el razonamiento completo (evita colisión de id ante doble-tap en "+ Muestra").
+  const nextMuestraIdRef = useRef<number | null>(null);
+  if (nextMuestraIdRef.current === null) {
+    nextMuestraIdRef.current = Math.max(0, ...muestras.map((m) => m.id)) + 1;
+  }
 
   // Actualizar un campo de la muestra activa
   const updateMuestra = useCallback((campo: keyof Omit<MuestraData, "id" | "filas">, valor: string) => {
@@ -338,7 +351,7 @@ export function DefectosConformadoForm({ puntoControlId, lineaProductivaId, prod
   }, [muestraActivaId]);
 
   const agregarMuestra = () => {
-    const nuevoId = Math.max(...muestras.map((m) => m.id)) + 1;
+    const nuevoId = nextMuestraIdRef.current!++;
     const nueva = crearMuestraVacia(nuevoId);
     nueva.hora = horaActual();
     setMuestras((prev) => [...prev, nueva]);
@@ -381,34 +394,14 @@ export function DefectosConformadoForm({ puntoControlId, lineaProductivaId, prod
       (r) => !r.data.fistula || !r.data.barril || !r.data.ventana || r.data.peso_neto === null
     );
     if (incompletos.length > 0) {
-      setError(`Hay ${incompletos.length} fila(s) con campos incompletos. Completá todos antes de guardar.`);
+      setErrorValidacion(`Hay ${incompletos.length} fila(s) con campos incompletos. Completá todos antes de guardar.`);
       return;
     }
+    setErrorValidacion(null);
 
-    setEnviando(true);
-    setError(null);
+    if (!window.confirm("Vas a guardar la jornada y salir de este punto de control. ¿Confirmás?")) return;
 
-    try {
-      const res = await fetch("/api/v1/calidad/registros/batch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(registros),
-      });
-
-      const json = await res.json();
-
-      if (!res.ok) {
-        setError(json.error ?? "Error al guardar los registros.");
-        return;
-      }
-
-      setExito(true);
-      setTimeout(() => router.push("/calidad"), 2000);
-    } catch {
-      setError("Error de conexión. Verificá la red e intentá nuevamente.");
-    } finally {
-      setEnviando(false);
-    }
+    await guardarBatch(registros);
   };
 
   if (exito) {
@@ -501,9 +494,9 @@ export function DefectosConformadoForm({ puntoControlId, lineaProductivaId, prod
       </div>
 
       {/* Error */}
-      {error && (
+      {(errorValidacion ?? error) && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">
-          {error}
+          {errorValidacion ?? error}
         </div>
       )}
 

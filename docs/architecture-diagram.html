@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Arquitectura — Control de Producción La Cumbre</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  :root { color-scheme: dark; }
+  body { background:#0a0c10; }
+  #viewport::-webkit-scrollbar { height:12px; width:12px; }
+  #viewport::-webkit-scrollbar-track { background:#0f1218; }
+  #viewport::-webkit-scrollbar-thumb { background:#2a2f3a; border-radius:8px; }
+  #viewport::-webkit-scrollbar-thumb:hover { background:#3a4150; }
+  .node-card {
+    position:absolute; width:210px; min-height:56px;
+    background:rgba(20,23,31,0.92); border:1px solid rgba(255,255,255,0.08);
+    border-left-width:4px; border-radius:10px; padding:7px 10px;
+    cursor:pointer; transition:transform .15s ease, box-shadow .2s ease, opacity .25s ease, border-color .2s ease;
+    box-shadow:0 1px 2px rgba(0,0,0,.4);
+  }
+  .node-card:hover { transform:translateY(-2px); box-shadow:0 6px 16px rgba(0,0,0,.45); }
+  .node-card .lbl { font-size:11.5px; font-weight:600; color:#e8eaf0; line-height:1.25; }
+  .node-card .file { font-size:9.5px; color:#7b8296; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .node-card.dim { opacity:.16; }
+  .node-card.flow-active { box-shadow:0 0 0 2px #ef4444, 0 8px 22px rgba(239,68,68,.35); border-color:#ef4444; }
+  .node-card.flow-current { box-shadow:0 0 0 3px #fbbf24, 0 0 26px rgba(251,191,36,.55); border-color:#fbbf24; animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{ transform:scale(1);} 50%{ transform:scale(1.035);} }
+  .col-header { position:absolute; font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; opacity:.75; }
+  .pill { padding:6px 13px; border-radius:999px; font-size:12.5px; font-weight:600; border:1px solid rgba(255,255,255,.12); cursor:pointer; transition:all .15s ease; white-space:nowrap; }
+  .pill:hover { border-color:rgba(255,255,255,.3); }
+  .pill.active { background:#ef4444; border-color:#ef4444; color:white; box-shadow:0 0 16px rgba(239,68,68,.45); }
+  .legend-dot { width:9px; height:9px; border-radius:3px; display:inline-block; }
+  .scrollbox::-webkit-scrollbar { width:8px; }
+  .scrollbox::-webkit-scrollbar-thumb { background:#2a2f3a; border-radius:6px; }
+  .fade-in { animation:fadeIn .25s ease; }
+  @keyframes fadeIn { from{opacity:0; transform:translateY(4px);} to{opacity:1; transform:translateY(0);} }
+  .edge-flow { stroke-dasharray:6 5; animation:dash 1s linear infinite; }
+  @keyframes dash { to { stroke-dashoffset:-22; } }
+</style>
+</head>
+<body class="text-slate-200">
+
+<!-- ============== DATOS EMBEBIDOS (idéntico a docs/architecture-graph.json) ============== -->
+<script type="application/json" id="graph-data">
+{
+  "meta": {
+    "project": "Control de Producción — La Cumbre",
+    "description": "Grafo de arquitectura para agentes IA: capas, nodos (páginas, componentes, API routes, services, repository, ORM, entidades de DB, auth, lib compartida) y flujos de negocio reales trazados en el código.",
+    "generatedAt": "2026-07-24",
+    "stack": ["Next.js 14 (App Router)", "TypeScript", "Prisma 7 (@prisma/adapter-pg)", "PostgreSQL (Supabase)", "NextAuth v5", "AJV (draft-07)", "Zod", "Tailwind v4"],
+    "layerOrder": ["ui-page", "ui-component", "api", "service", "repository", "orm", "database", "auth", "shared-lib"],
+    "canvas": { "width": 2040, "height": 1660 },
+    "layoutNote": "x,y en cada nodo son coordenadas absolutas en px sobre 'canvas', listas para renderizar sin recalcular layout. Columnas principales de izquierda a derecha siguen el flujo de una request: Página -> Componente -> API -> Service -> Repository -> ORM -> Base de datos. 'auth' y 'shared-lib' son bandas transversales debajo del pipeline principal, consumidas por varias columnas."
+  },
+  "layers": [
+    { "id": "ui-page",      "label": "Páginas (App Router)",        "color": "#38bdf8" },
+    { "id": "ui-component", "label": "Componentes React",            "color": "#a78bfa" },
+    { "id": "api",          "label": "API Routes (Next.js)",         "color": "#f59e0b" },
+    { "id": "service",      "label": "Service Layer",                "color": "#34d399" },
+    { "id": "repository",   "label": "DB Layer (Repository)",        "color": "#2dd4bf" },
+    { "id": "orm",          "label": "Prisma (ORM)",                 "color": "#e879f9" },
+    { "id": "database",     "label": "PostgreSQL (entidades)",       "color": "#818cf8" },
+    { "id": "auth",         "label": "Auth & Middleware",            "color": "#fb923c" },
+    { "id": "shared-lib",   "label": "Lib compartida / Hooks",       "color": "#a3e635" }
+  ],
+  "nodes": [
+    { "id": "page-home",                    "label": "Home (/)",                          "layer": "ui-page",      "type": "page",      "file": "src/app/page.tsx",                                            "description": "Selector de módulos top-level: Calidad y Maestro de Productos (Maestro gateado a rol admin).", "x": 40,  "y": 40 },
+    { "id": "page-login",                   "label": "Login (/login)",                    "layer": "ui-page",      "type": "page",      "file": "src/app/login/page.tsx",                                       "description": "Formulario de acceso. Único punto de entrada sin sesión.", "x": 40,  "y": 116 },
+    { "id": "page-calidad-hub",             "label": "Hub Calidad (/calidad)",             "layer": "ui-page",      "type": "page",      "file": "src/app/calidad/page.tsx",                                     "description": "Listado de funcionalidades del módulo Calidad (Puntos de Control activo; Reportes/Auditoría/Lotes 'Próximamente').", "x": 40,  "y": 192 },
+    { "id": "page-puntos-control",          "label": "Puntos de Control",                  "layer": "ui-page",      "type": "page",      "file": "src/app/calidad/puntos-control/page.tsx",                      "description": "Server Component: lee líneas+PCs y productos activos directo del repository, renderiza el asistente de 3 pasos.", "x": 40,  "y": 268 },
+    { "id": "page-punto-control-detalle",   "label": "Detalle de Punto de Control",        "layer": "ui-page",      "type": "page",      "file": "src/app/calidad/[lineaId]/[puntoControlId]/page.tsx",          "description": "Resuelve relación PC↔línea, producto activo y especificaciones de captura; dispatch del formulario por tipoFormulario.", "x": 40,  "y": 344 },
+    { "id": "page-lote-nuevo",              "label": "Alta de Lote (/calidad/lotes/nuevo)","layer": "ui-page",      "type": "page",      "file": "src/app/calidad/lotes/nuevo/page.tsx",                         "description": "Alta administrativa manual de Lote. Gateada a roles de supervisión — building block interno, fuera de la navegación principal.", "x": 40,  "y": 420 },
+    { "id": "page-maestro",                 "label": "Maestro de Productos (/maestro)",    "layer": "ui-page",      "type": "page",      "file": "src/app/maestro/page.tsx",                                     "description": "Módulo top-level (hermano de Calidad, desde 2026-07-22). Lee todo directo del repository; gateado a rol admin.", "x": 40,  "y": 496 },
+
+    { "id": "comp-login-form",              "label": "LoginForm",                         "layer": "ui-component", "type": "component",  "file": "src/app/login/page.tsx",                                      "description": "handleSubmit() llama signIn('credentials', {redirect:false}) de next-auth/react.", "x": 340, "y": 40 },
+    { "id": "comp-calidad-modulo-view",      "label": "CalidadModuloView",                 "layer": "ui-component", "type": "component",  "file": "src/components/calidad/CalidadModuloView.tsx",                "description": "Asistente de 3 pasos: línea → producto → grilla de PCs. Persiste la línea activa en sessionStorage.", "x": 340, "y": 116 },
+    { "id": "comp-producto-activo-banner",  "label": "ProductoActivoBanner",              "layer": "ui-component", "type": "component",  "file": "src/components/calidad/ProductoActivoBanner.tsx",             "description": "Banner de contexto (producto/lote activo) reutilizado en los 7 formularios de captura.", "x": 340, "y": 192 },
+    { "id": "comp-registros-del-dia",       "label": "RegistrosDelDia",                   "layer": "ui-component", "type": "component",  "file": "src/components/calidad/RegistrosDelDia.tsx",                  "description": "Hook useRegistrosDelDia + lista de registros ya cargados hoy para el PC/línea activos.", "x": 340, "y": 268 },
+    { "id": "comp-numpad-industrial",       "label": "NumpadIndustrial",                  "layer": "ui-component", "type": "component",  "file": "src/components/calidad/NumpadIndustrial.tsx",                 "description": "Teclado numérico táctil de planta (panel fijo, auto-avance entre campos).", "x": 340, "y": 344 },
+    { "id": "comp-indicador-spec",          "label": "IndicadorSpec",                     "layer": "ui-component", "type": "component",  "file": "src/components/calidad/IndicadorSpec.tsx",                    "description": "Compara un valor medido contra la especificación vigente del producto (specDeCampo/evaluarValor).", "x": 340, "y": 420 },
+    { "id": "comp-produccion-diaria-form",  "label": "ProduccionDiariaForm",              "layer": "ui-component", "type": "component",  "file": "src/components/calidad/ProduccionDiariaForm.tsx",             "description": "Cajas, pallets, lote PT (= numeroLote activo), vencimiento. Cajas por estándar del maestro.", "x": 340, "y": 496 },
+    { "id": "comp-peso-mediciones-form",    "label": "PesoMedicionesForm",                "layer": "ui-component", "type": "component",  "file": "src/components/calidad/PesoMedicionesForm.tsx",               "description": "Peso Alfajor/Relleno/Baño/Tapas — 12 mediciones con numpad, estadísticas en vivo, cobertura por resta apareada en modo Tapas.", "x": 340, "y": 572 },
+    { "id": "comp-temperatura-form",        "label": "TemperaturaForm",                   "layer": "ui-component", "type": "component",  "file": "src/components/calidad/TemperaturaForm.tsx",                  "description": "Temperatura Condensación Túnel / Tanques. Tiempo de túnel una vez por jornada.", "x": 340, "y": 648 },
+    { "id": "comp-defectos-conformado-form","label": "DefectosConformadoForm",            "layer": "ui-component", "type": "component",  "file": "src/components/calidad/DefectosConformadoForm.tsx",           "description": "Defectos visuales/gravimétricos de conformado, 12 filas por muestra.", "x": 340, "y": 724 },
+    { "id": "comp-detector-metales-form",   "label": "DetectorMetalesForm",               "layer": "ui-component", "type": "component",  "file": "src/components/calidad/DetectorMetalesForm.tsx",              "description": "Detector de Metales — PCC1 del plan HACCP, verificación horaria.", "x": 340, "y": 800 },
+    { "id": "comp-trazabilidad-insumos-form","label": "TrazabilidadInsumosForm",          "layer": "ui-component", "type": "component",  "file": "src/components/calidad/TrazabilidadInsumosForm.tsx",          "description": "Un registro por cambio de lote de insumo (tapas bañadas, Bonobon, DDL, baño chocolate).", "x": 340, "y": 876 },
+    { "id": "comp-registro-generico-form",  "label": "RegistroGenericoForm",              "layer": "ui-component", "type": "component",  "file": "src/components/calidad/RegistroGenericoForm.tsx",             "description": "Fallback genérico para tipoFormulario sin componente especializado. Usa el endpoint singular, no batch.", "x": 340, "y": 952 },
+    { "id": "comp-alta-lote-form",          "label": "AltaLoteForm",                      "layer": "ui-component", "type": "component",  "file": "src/components/calidad/AltaLoteForm.tsx",                     "description": "Alta manual de Lote (producto, fecha de producción, notas).", "x": 340, "y": 1028 },
+    { "id": "comp-maestro-view",            "label": "MaestroView",                       "layer": "ui-component", "type": "component",  "file": "src/components/calidad/maestro/MaestroView.tsx",              "description": "Tabs del módulo admin: Productos / Marcas y Familias / Especificaciones.", "x": 340, "y": 1104 },
+    { "id": "comp-productos-panel",         "label": "ProductosPanel",                    "layer": "ui-component", "type": "component",  "file": "src/components/calidad/maestro/ProductosPanel.tsx",           "description": "Listado + alta/edición de Producto.", "x": 340, "y": 1180 },
+    { "id": "comp-catalogo-panel",          "label": "CatalogoPanel",                     "layer": "ui-component", "type": "component",  "file": "src/components/calidad/maestro/CatalogoPanel.tsx",            "description": "Alta/edición de Marca y Familia.", "x": 340, "y": 1256 },
+    { "id": "comp-especificaciones-editor", "label": "EspecificacionesEditor",            "layer": "ui-component", "type": "component",  "file": "src/components/calidad/maestro/EspecificacionesEditor.tsx",   "description": "Alta de EspecificacionProducto versionada (objetivo/aceptación/crítico por parámetro).", "x": 340, "y": 1332 },
+
+    { "id": "api-nextauth",                 "label": "[...nextauth]",                     "layer": "api",          "type": "api",        "file": "src/app/api/auth/[...nextauth]/route.ts",                     "description": "Expone los handlers GET/POST generados por NextAuth (src/lib/auth.ts).", "x": 640, "y": 40 },
+    { "id": "api-lineas",                   "label": "GET /calidad/lineas",               "layer": "api",          "type": "api",        "file": "src/app/api/v1/calidad/lineas/route.ts",                      "description": "Líneas productivas con sus puntos de control.", "x": 640, "y": 116 },
+    { "id": "api-puntos-control",           "label": "GET /calidad/puntos-control",       "layer": "api",          "type": "api",        "file": "src/app/api/v1/calidad/puntos-control/route.ts",              "description": "Puntos de control de una línea. Query Prisma inline, sin service ni repository dedicado.", "x": 640, "y": 192 },
+    { "id": "api-lotes",                    "label": "POST /calidad/lotes",               "layer": "api",          "type": "api",        "file": "src/app/api/v1/calidad/lotes/route.ts",                       "description": "Alta administrativa de Lote. Gateado a ROLES_SUPERVISION_CALIDAD.", "x": 640, "y": 268 },
+    { "id": "api-producto-activo",          "label": "GET/POST .../producto-activo",      "layer": "api",          "type": "api",        "file": "src/app/api/v1/lineas-productivas/[lineaId]/producto-activo/route.ts", "description": "GET lee el puntero activo (repo directo). POST activa/cambia el producto de la línea — sin gate de rol (deliberado).", "x": 640, "y": 344 },
+    { "id": "api-registros",                "label": "GET/POST /calidad/registros",       "layer": "api",          "type": "api",        "file": "src/app/api/v1/calidad/registros/route.ts",                   "description": "GET registros del día (repo directo). POST alta individual (usada por RegistroGenericoForm).", "x": 640, "y": 420 },
+    { "id": "api-registros-batch",          "label": "POST /calidad/registros/batch",     "layer": "api",          "type": "api",        "file": "src/app/api/v1/calidad/registros/batch/route.ts",             "description": "Ingesta atómica de múltiples registros (hasta 500). Usada por los 6 formularios especializados vía useBatchGuardar.", "x": 640, "y": 496 },
+    { "id": "api-maestro-productos",        "label": "POST /maestro/productos",           "layer": "api",          "type": "api",        "file": "src/app/api/v1/maestro/productos/route.ts",                   "description": "Alta de Producto. Solo admin.", "x": 640, "y": 572 },
+    { "id": "api-maestro-productos-id",     "label": "PATCH /maestro/productos/:id",      "layer": "api",          "type": "api",        "file": "src/app/api/v1/maestro/productos/[id]/route.ts",              "description": "Edición de Producto. Solo admin.", "x": 640, "y": 648 },
+    { "id": "api-maestro-marcas",           "label": "POST /maestro/marcas",              "layer": "api",          "type": "api",        "file": "src/app/api/v1/maestro/marcas/route.ts",                      "description": "Alta de Marca. Solo admin.", "x": 640, "y": 724 },
+    { "id": "api-maestro-marcas-id",        "label": "PATCH /maestro/marcas/:id",         "layer": "api",          "type": "api",        "file": "src/app/api/v1/maestro/marcas/[id]/route.ts",                 "description": "Edición de Marca. Solo admin.", "x": 640, "y": 800 },
+    { "id": "api-maestro-familias",         "label": "POST /maestro/familias",            "layer": "api",          "type": "api",        "file": "src/app/api/v1/maestro/familias/route.ts",                    "description": "Alta de Familia. Solo admin.", "x": 640, "y": 876 },
+    { "id": "api-maestro-familias-id",      "label": "PATCH /maestro/familias/:id",       "layer": "api",          "type": "api",        "file": "src/app/api/v1/maestro/familias/[id]/route.ts",               "description": "Edición de Familia. Solo admin.", "x": 640, "y": 952 },
+    { "id": "api-maestro-especificaciones", "label": "POST /maestro/especificaciones",    "layer": "api",          "type": "api",        "file": "src/app/api/v1/maestro/especificaciones/route.ts",            "description": "Crea/versiona una EspecificacionProducto (cierra la vigente, abre la nueva, mismo timestamp). Solo admin.", "x": 640, "y": 1028 },
+
+    { "id": "svc-lote",                     "label": "lote.service",                      "layer": "service",      "type": "service",     "file": "src/services/calidad/lote.service.ts",                        "description": "crearLoteService: valida Zod, verifica producto activo, delega en el repository.", "x": 940, "y": 40 },
+    { "id": "svc-registro",                 "label": "registro.service",                  "layer": "service",      "type": "service",     "file": "src/services/calidad/registro.service.ts",                    "description": "createRegistroService / createRegistrosBatchService: inyecta responsableId server-side, valida estructura (Zod) y datos (AJV contra schema_json).", "x": 940, "y": 116 },
+    { "id": "svc-linea-producto-activo",    "label": "linea-producto-activo.service",     "layer": "service",      "type": "service",     "file": "src/services/calidad/linea-producto-activo.service.ts",      "description": "activarProductoLineaService: guard anti-abuso (cooldown 30s, máx 5/10min), valida producto↔línea y vidaUtilMeses.", "x": 940, "y": 192 },
+    { "id": "svc-maestro",                  "label": "maestro.service",                   "layer": "service",      "type": "service",     "file": "src/services/calidad/maestro.service.ts",                     "description": "CRUD de Producto/Marca/Familia + versionado de EspecificacionProducto. Mapea errores Prisma (P2002→DUPLICADO).", "x": 940, "y": 268 },
+
+    { "id": "repo-calidad",                 "label": "calidad.repository",                "layer": "repository",   "type": "repository",  "file": "src/db/calidad.repository.ts",                                "description": "CRUD de Lote, RegistroCalidad, activación de línea, turnos, auditoría append-only.", "x": 1240, "y": 40 },
+    { "id": "repo-maestro",                 "label": "maestro.repository",                "layer": "repository",   "type": "repository",  "file": "src/db/maestro.repository.ts",                                "description": "CRUD de Producto/Marca/Familia, catálogo de Parametro/bindings, EspecificacionProducto versionada, AuditoriaMaestro.", "x": 1240, "y": 116 },
+
+    { "id": "orm-prisma",                   "label": "Prisma Client",                     "layer": "orm",          "type": "orm",         "file": "src/lib/prisma.ts",                                           "description": "Singleton PrismaClient + @prisma/adapter-pg (compatibilidad con el pooler PgBouncer de Supabase).", "x": 1540, "y": 400 },
+
+    { "id": "db-usuario",                   "label": "Usuario",                           "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "email, password (bcrypt), rol (enum), activo. FK-target de casi todo (autoría, activaciones, auditorías).", "x": 1780, "y": 40 },
+    { "id": "db-linea-productiva",          "label": "LineaProductiva",                   "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "nombre, codigo (usado en el numeroLote definitivo), modulo.", "x": 1780, "y": 116 },
+    { "id": "db-producto",                  "label": "Producto",                          "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "sku, nombre, familiaId, marcaId, lineaProductivaId?, vidaUtilMeses, cajasPorPallet, nomenclaturaLote (dormido).", "x": 1780, "y": 192 },
+    { "id": "db-marca",                     "label": "Marca",                             "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "nombre, lineaNegocio (marca_propia/copacker_arcor/fason_terceros).", "x": 1780, "y": 268 },
+    { "id": "db-familia",                   "label": "Familia",                           "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "slug único, nombre. 1:N Producto, 1:N PuntoControlFamilia.", "x": 1780, "y": 344 },
+    { "id": "db-lote",                      "label": "Lote",                              "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "numeroLote único, productoId, lineaProductivaId?, fechaProduccion. Unique compuesto [producto,línea,fecha] habilita find-or-create.", "x": 1780, "y": 420 },
+    { "id": "db-linea-produccion-estado",   "label": "LineaProduccionEstado",             "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "Puntero mutable 1:1 con línea — loteActivoId, activadoPorId, activadoEn. 'Qué se produce ahora'.", "x": 1780, "y": 496 },
+    { "id": "db-linea-activacion-log",      "label": "LineaActivacionLog",                "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "Append-only: historial de cada activación/changeover de línea.", "x": 1780, "y": 572 },
+    { "id": "db-registro-calidad",          "label": "RegistroCalidad",                   "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "Tabla de hechos HACCP. data:JSONB validado por schema_json. Soft-delete (deletedAt), nunca borrado físico.", "x": 1780, "y": 648 },
+    { "id": "db-auditoria-registro",        "label": "AuditoriaRegistro",                 "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "Append-only: snapshot antes/después de cada cambio en RegistroCalidad.", "x": 1780, "y": 724 },
+    { "id": "db-punto-control",             "label": "PuntoControl",                      "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "tipoFormulario (dispatch de UI) + schema_json (JSON Schema validado con AJV). Patrón extensible sin migraciones (ADR-001).", "x": 1780, "y": 800 },
+    { "id": "db-especificacion-producto",   "label": "EspecificacionProducto",            "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "Versionada append-only: objetivo/aceptación/crítico por producto×PC×parámetro. Único vigente por índice parcial.", "x": 1780, "y": 876 },
+    { "id": "db-auditoria-maestro",         "label": "AuditoriaMaestro",                  "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "Append-only: snapshot antes/después de cambios en Producto/Marca/Familia/Especificación.", "x": 1780, "y": 952 },
+    { "id": "db-secuencia-diaria",          "label": "SecuenciaDiaria",                   "layer": "database",     "type": "entity",      "file": "prisma/schema.prisma",                                        "description": "PK [línea, fecha, tipo], ultimoValor — correlativos atómicos server-side (ADR-006) para pallet/muestra.", "x": 1780, "y": 1028 },
+
+    { "id": "auth-middleware",              "label": "middleware.ts",                     "layer": "auth",         "type": "auth",        "file": "src/middleware.ts",                                           "description": "NextAuth(authConfig).auth — protege todas las páginas (Edge runtime, sin Prisma). Excluye /api/* del matcher.", "x": 40,   "y": 1420 },
+    { "id": "auth-config",                  "label": "auth.config.ts",                    "layer": "auth",         "type": "auth",        "file": "src/lib/auth.config.ts",                                      "description": "Config Edge-safe: callback authorized() redirige a /login sin sesión. Sin imports de Prisma/bcrypt.", "x": 340,  "y": 1420 },
+    { "id": "auth-node",                    "label": "auth.ts",                           "layer": "auth",         "type": "auth",        "file": "src/lib/auth.ts",                                             "description": "Instancia Node completa: Credentials provider (bcrypt + DUMMY_HASH anti-timing), guard DEMO_MODE, callback jwt con revalidación periódica.", "x": 640,  "y": 1420 },
+    { "id": "auth-rate-limit",              "label": "rate-limit-login.ts",               "layer": "auth",         "type": "auth",        "file": "src/lib/auth/rate-limit-login.ts",                            "description": "Bloqueo duro por email (5/15min). Detección por IP (30/15min) — nunca bloquea, solo logea (spoofeable sin proxy).", "x": 940,  "y": 1420 },
+    { "id": "auth-session-validation",      "label": "session-validation.ts",             "layer": "auth",         "type": "auth",        "file": "src/lib/auth/session-validation.ts",                          "description": "Revalida el JWT contra la DB (usuario activo+rol) máx. 1/min. Fail-open si la DB no responde.", "x": 1240, "y": 1420 },
+
+    { "id": "lib-use-batch-guardar",        "label": "useBatchGuardar",                   "layer": "shared-lib",   "type": "hook",        "file": "src/hooks/useBatchGuardar.ts",                                "description": "Hook compartido por los 6 formularios especializados: hace el POST a registros/batch y maneja enviando/error/éxito+redirect.", "x": 40,   "y": 1540 },
+    { "id": "lib-fecha-planta",             "label": "fecha-planta.ts",                   "layer": "shared-lib",   "type": "lib",         "file": "src/lib/calidad/fecha-planta.ts",                             "description": "hoyPlanta()/horaPlanta() en TZ America/Argentina/Cordoba + jornadaProductiva() (corte 6am-6am). Nunca usar Date().toISOString() directo.", "x": 260,  "y": 1540 },
+    { "id": "lib-lote-numero",              "label": "lote-numero.ts",                    "layer": "shared-lib",   "type": "lib",         "file": "src/lib/calidad/lote-numero.ts",                              "description": "generarNumeroLote(): formato definitivo L-DD/MM/AAAA-AJJJ-hh:mm-ENV (ADR-013), determinístico por minuto.", "x": 480,  "y": 1540 },
+    { "id": "lib-lote-pt",                  "label": "lote-pt.ts",                        "layer": "shared-lib",   "type": "lib",         "file": "src/lib/calidad/lote-pt.ts",                                  "description": "calcularFechaVencimiento()/calcularVencimiento(): producción + vidaUtilMeses, con clamp de día de mes.", "x": 700,  "y": 1540 },
+    { "id": "lib-especificaciones",         "label": "especificaciones.ts",               "layer": "shared-lib",   "type": "lib",         "file": "src/lib/calidad/especificaciones.ts",                         "description": "evaluarValor()/formatearRango(): compara valor medido contra límites de aceptación/crítico.", "x": 920,  "y": 1540 },
+    { "id": "lib-peso-cobertura",           "label": "peso-cobertura.ts",                 "layer": "shared-lib",   "type": "lib",         "file": "src/lib/calidad/peso-cobertura.ts",                           "description": "calcularCoberturaPorObservacion(): peso de cobertura de chocolate por resta apareada (tapa con/sin baño).", "x": 1140, "y": 1540 },
+    { "id": "lib-validate-jsonb",           "label": "validate-jsonb.ts",                 "layer": "shared-lib",   "type": "lib",         "file": "src/lib/validate-jsonb.ts",                                   "description": "validateAgainstSchema(): AJV draft-07, multipleOfPrecision:9 (fix de precisión de floats, 2026-07-24).", "x": 1360, "y": 1540 },
+    { "id": "lib-maestro-http",             "label": "maestro-http.ts",                   "layer": "shared-lib",   "type": "lib",         "file": "src/lib/calidad/maestro-http.ts",                             "description": "gateAdminMaestro()/parseBody()/responder() — helpers compartidos por las 7 rutas del maestro.", "x": 1580, "y": 1540 },
+    { "id": "lib-roles",                    "label": "roles.ts",                          "layer": "shared-lib",   "type": "lib",         "file": "src/lib/auth/roles.ts",                                       "description": "ROLES_SUPERVISION_CALIDAD, ROLES_ADMIN_MAESTRO, tieneRol() — un solo Set compartido entre page y endpoint.", "x": 1800, "y": 1540 }
+  ],
+  "edges": [
+    { "id": "e-mw-home",        "source": "auth-middleware", "target": "page-home",                  "type": "protects", "label": "protege (sin sesión → /login)" },
+    { "id": "e-mw-calhub",      "source": "auth-middleware", "target": "page-calidad-hub",            "type": "protects", "label": "protege" },
+    { "id": "e-mw-puntos",      "source": "auth-middleware", "target": "page-puntos-control",         "type": "protects", "label": "protege" },
+    { "id": "e-mw-detalle",     "source": "auth-middleware", "target": "page-punto-control-detalle",  "type": "protects", "label": "protege" },
+    { "id": "e-mw-lotenuevo",   "source": "auth-middleware", "target": "page-lote-nuevo",              "type": "protects", "label": "protege" },
+    { "id": "e-mw-maestro",     "source": "auth-middleware", "target": "page-maestro",                 "type": "protects", "label": "protege" },
+    { "id": "e-mw-config",      "source": "auth-middleware", "target": "auth-config",                  "type": "uses",     "label": "NextAuth(authConfig).auth" },
+
+    { "id": "e-login-form",     "source": "page-login",              "target": "comp-login-form",     "type": "renders",  "label": "renderiza" },
+    { "id": "e-login-signin",   "source": "comp-login-form",         "target": "api-nextauth",        "type": "invokes",  "label": "signIn('credentials')" },
+    { "id": "e-nextauth-auth",  "source": "api-nextauth",            "target": "auth-node",           "type": "uses",     "label": "handlers de auth.ts" },
+    { "id": "e-authnode-config","source": "auth-node",               "target": "auth-config",         "type": "uses",     "label": "...authConfig (spread)" },
+    { "id": "e-authnode-rl",    "source": "auth-node",               "target": "auth-rate-limit",     "type": "uses",     "label": "loginBloqueado() / registrarFallo()" },
+    { "id": "e-authnode-db",    "source": "auth-node",               "target": "db-usuario",          "type": "query",    "label": "prisma.usuario.findUnique + bcrypt.compare / DUMMY_HASH" },
+    { "id": "e-authnode-sv",    "source": "auth-node",               "target": "auth-session-validation", "type": "uses", "label": "callback jwt: revalida en requests posteriores" },
+    { "id": "e-sv-db",          "source": "auth-session-validation", "target": "db-usuario",          "type": "query",    "label": "revalida activo+rol (máx. 1/min, fail-open)" },
+    { "id": "e-sv-mw",          "source": "auth-session-validation", "target": "auth-middleware",     "type": "context",  "label": "sesión validada disponible para el middleware" },
+
+    { "id": "e-puntos-view",    "source": "page-puntos-control",         "target": "comp-calidad-modulo-view",   "type": "renders", "label": "renderiza" },
+    { "id": "e-modview-lineas", "source": "comp-calidad-modulo-view",    "target": "api-lineas",                 "type": "fetch",   "label": "GET refetch de líneas" },
+    { "id": "e-modview-pa-get", "source": "comp-calidad-modulo-view",    "target": "api-producto-activo",        "type": "fetch",   "label": "GET producto activo al confirmar línea" },
+    { "id": "e-modview-pa-post","source": "comp-calidad-modulo-view",    "target": "api-producto-activo",        "type": "fetch",   "label": "POST activar/cambiar producto" },
+
+    { "id": "e-detalle-banner", "source": "page-punto-control-detalle", "target": "comp-producto-activo-banner", "type": "renders", "label": "incluye en todos los forms" },
+    { "id": "e-detalle-prod",   "source": "page-punto-control-detalle", "target": "comp-produccion-diaria-form", "type": "renders", "label": "dispatch tipoFormulario=produccion_diaria" },
+    { "id": "e-detalle-peso",   "source": "page-punto-control-detalle", "target": "comp-peso-mediciones-form",   "type": "renders", "label": "dispatch tipoFormulario=peso_*" },
+    { "id": "e-detalle-temp",   "source": "page-punto-control-detalle", "target": "comp-temperatura-form",       "type": "renders", "label": "dispatch tipoFormulario=temperatura_*" },
+    { "id": "e-detalle-def",    "source": "page-punto-control-detalle", "target": "comp-defectos-conformado-form","type": "renders", "label": "dispatch tipoFormulario=defectos_conformado" },
+    { "id": "e-detalle-det",    "source": "page-punto-control-detalle", "target": "comp-detector-metales-form",  "type": "renders", "label": "dispatch tipoFormulario=detector_metales" },
+    { "id": "e-detalle-traz",   "source": "page-punto-control-detalle", "target": "comp-trazabilidad-insumos-form","type": "renders","label": "dispatch tipoFormulario=trazabilidad_insumos" },
+    { "id": "e-detalle-gen",    "source": "page-punto-control-detalle", "target": "comp-registro-generico-form", "type": "renders", "label": "fallback sin componente especializado" },
+
+    { "id": "e-lotenuevo-form", "source": "page-lote-nuevo",     "target": "comp-alta-lote-form",  "type": "renders", "label": "renderiza" },
+    { "id": "e-lotenuevo-roles","source": "page-lote-nuevo",     "target": "lib-roles",            "type": "uses",    "label": "tieneRol(rol, ROLES_SUPERVISION_CALIDAD) — Server Component" },
+    { "id": "e-altalote-api",   "source": "comp-alta-lote-form", "target": "api-lotes",            "type": "fetch",   "label": "POST { productoId, fechaProduccion, notas }" },
+
+    { "id": "e-maestro-view",   "source": "page-maestro",       "target": "comp-maestro-view",           "type": "renders", "label": "renderiza" },
+    { "id": "e-maestroview-prod","source": "comp-maestro-view", "target": "comp-productos-panel",        "type": "renders", "label": "tab Productos" },
+    { "id": "e-maestroview-cat","source": "comp-maestro-view",  "target": "comp-catalogo-panel",         "type": "renders", "label": "tab Marcas y Familias" },
+    { "id": "e-maestroview-esp","source": "comp-maestro-view",  "target": "comp-especificaciones-editor","type": "renders", "label": "tab Especificaciones" },
+    { "id": "e-prodpanel-api",  "source": "comp-productos-panel","target": "api-maestro-productos",      "type": "fetch",   "label": "POST alta de producto" },
+    { "id": "e-prodpanel-api2", "source": "comp-productos-panel","target": "api-maestro-productos-id",   "type": "fetch",   "label": "PATCH edición de producto" },
+    { "id": "e-catpanel-marcas","source": "comp-catalogo-panel","target": "api-maestro-marcas",          "type": "fetch",   "label": "POST/PATCH Marca" },
+    { "id": "e-catpanel-fam",   "source": "comp-catalogo-panel","target": "api-maestro-familias",        "type": "fetch",   "label": "POST/PATCH Familia" },
+    { "id": "e-esp-api",        "source": "comp-especificaciones-editor","target": "api-maestro-especificaciones", "type": "fetch", "label": "POST crea/versiona spec" },
+
+    { "id": "e-form-batchhook-prod", "source": "comp-produccion-diaria-form",   "target": "lib-use-batch-guardar", "type": "uses", "label": "guardar(registros)" },
+    { "id": "e-form-batchhook-peso", "source": "comp-peso-mediciones-form",     "target": "lib-use-batch-guardar", "type": "uses", "label": "guardar(registros)" },
+    { "id": "e-form-batchhook-temp", "source": "comp-temperatura-form",         "target": "lib-use-batch-guardar", "type": "uses", "label": "guardar(registros)" },
+    { "id": "e-form-batchhook-def",  "source": "comp-defectos-conformado-form", "target": "lib-use-batch-guardar", "type": "uses", "label": "guardar(registros)" },
+    { "id": "e-form-batchhook-det",  "source": "comp-detector-metales-form",    "target": "lib-use-batch-guardar", "type": "uses", "label": "guardar(registros)" },
+    { "id": "e-form-batchhook-traz", "source": "comp-trazabilidad-insumos-form","target": "lib-use-batch-guardar", "type": "uses", "label": "guardar(registros)" },
+    { "id": "e-hook-batch-api",      "source": "lib-use-batch-guardar",         "target": "api-registros-batch",   "type": "fetch", "label": "POST /calidad/registros/batch" },
+    { "id": "e-gen-api",             "source": "comp-registro-generico-form",   "target": "api-registros",         "type": "fetch", "label": "POST /calidad/registros (individual)" },
+    { "id": "e-regdeldia-api",       "source": "comp-registros-del-dia",        "target": "api-registros",         "type": "fetch", "label": "GET registros de hoy" },
+
+    { "id": "e-numpad-prod",   "source": "comp-produccion-diaria-form", "target": "comp-numpad-industrial", "type": "renders", "label": "cajas / peso" },
+    { "id": "e-numpad-peso",   "source": "comp-peso-mediciones-form",   "target": "comp-numpad-industrial", "type": "renders", "label": "12 mediciones" },
+    { "id": "e-numpad-temp",   "source": "comp-temperatura-form",       "target": "comp-numpad-industrial", "type": "renders", "label": "campos de temperatura" },
+    { "id": "e-spec-peso",     "source": "comp-peso-mediciones-form",   "target": "comp-indicador-spec",    "type": "renders", "label": "spec por medición" },
+    { "id": "e-spec-temp",     "source": "comp-temperatura-form",       "target": "comp-indicador-spec",    "type": "renders", "label": "spec por campo" },
+    { "id": "e-indicador-lib", "source": "comp-indicador-spec",         "target": "lib-especificaciones",   "type": "uses",    "label": "specDeCampo() / evaluarValor()" },
+
+    { "id": "e-prod-fechaplanta",  "source": "comp-produccion-diaria-form",    "target": "lib-fecha-planta", "type": "uses", "label": "hoyPlanta()/horaPlanta()" },
+    { "id": "e-peso-fechaplanta",  "source": "comp-peso-mediciones-form",      "target": "lib-fecha-planta", "type": "uses", "label": "hoyPlanta()/horaPlanta()" },
+    { "id": "e-temp-fechaplanta",  "source": "comp-temperatura-form",          "target": "lib-fecha-planta", "type": "uses", "label": "hoyPlanta()/horaPlanta()" },
+    { "id": "e-def-fechaplanta",   "source": "comp-defectos-conformado-form",  "target": "lib-fecha-planta", "type": "uses", "label": "hoyPlanta()/horaPlanta()" },
+    { "id": "e-det-fechaplanta",   "source": "comp-detector-metales-form",     "target": "lib-fecha-planta", "type": "uses", "label": "hoyPlanta()/horaPlanta()" },
+    { "id": "e-traz-fechaplanta",  "source": "comp-trazabilidad-insumos-form", "target": "lib-fecha-planta", "type": "uses", "label": "hoyPlanta()/horaPlanta()" },
+    { "id": "e-gen-fechaplanta",   "source": "comp-registro-generico-form",    "target": "lib-fecha-planta", "type": "uses", "label": "hoyPlanta()/horaPlanta()" },
+    { "id": "e-prod-lotept",       "source": "comp-produccion-diaria-form",    "target": "lib-lote-pt",      "type": "uses", "label": "calcularVencimiento()" },
+    { "id": "e-peso-cobertura",    "source": "comp-peso-mediciones-form",      "target": "lib-peso-cobertura","type": "uses","label": "calcularCoberturaPorObservacion() (modo Tapas)" },
+
+    { "id": "e-api-lineas-repo",     "source": "api-lineas",           "target": "repo-calidad",              "type": "calls", "label": "getLineasConPuntosControl() — sin service" },
+    { "id": "e-api-puntos-orm",      "source": "api-puntos-control",   "target": "orm-prisma",                "type": "query", "label": "prisma.puntoControlLinea — query inline, sin service ni repo dedicado" },
+    { "id": "e-api-lotes-svc",       "source": "api-lotes",            "target": "svc-lote",                  "type": "calls", "label": "crearLoteService()" },
+    { "id": "e-api-lotes-roles",     "source": "api-lotes",            "target": "lib-roles",                 "type": "uses",  "label": "tieneRol(rol, ROLES_SUPERVISION_CALIDAD)" },
+    { "id": "e-api-lotes-auth",      "source": "api-lotes",            "target": "auth-node",                 "type": "authenticates", "label": "await auth()" },
+    { "id": "e-api-pa-repo",         "source": "api-producto-activo",  "target": "repo-calidad",              "type": "calls", "label": "GET: getProductoActivoDeLinea() — sin service" },
+    { "id": "e-api-pa-svc",          "source": "api-producto-activo",  "target": "svc-linea-producto-activo", "type": "calls", "label": "POST: activarProductoLineaService()" },
+    { "id": "e-api-pa-auth",         "source": "api-producto-activo",  "target": "auth-node",                 "type": "authenticates", "label": "await auth()" },
+    { "id": "e-api-reg-repo",        "source": "api-registros",        "target": "repo-calidad",              "type": "calls", "label": "GET: getRegistrosDelDia()/getRegistrosByLinea() — sin service" },
+    { "id": "e-api-reg-svc",         "source": "api-registros",        "target": "svc-registro",              "type": "calls", "label": "POST: createRegistroService()" },
+    { "id": "e-api-reg-auth",        "source": "api-registros",        "target": "auth-node",                 "type": "authenticates", "label": "await auth()" },
+    { "id": "e-api-batch-svc",       "source": "api-registros-batch",  "target": "svc-registro",              "type": "calls", "label": "createRegistrosBatchService()" },
+    { "id": "e-api-batch-auth",      "source": "api-registros-batch",  "target": "auth-node",                 "type": "authenticates", "label": "await auth()" },
+    { "id": "e-api-lineas-auth",     "source": "api-lineas",           "target": "auth-node",                 "type": "authenticates", "label": "await auth()" },
+    { "id": "e-api-puntos-auth",     "source": "api-puntos-control",   "target": "auth-node",                 "type": "authenticates", "label": "await auth()" },
+
+    { "id": "e-mprod-http",     "source": "api-maestro-productos",        "target": "lib-maestro-http", "type": "uses", "label": "gateAdminMaestro() + parseBody() + responder()" },
+    { "id": "e-mprodid-http",   "source": "api-maestro-productos-id",     "target": "lib-maestro-http", "type": "uses", "label": "gateAdminMaestro() + parseBody() + responder()" },
+    { "id": "e-mmarca-http",    "source": "api-maestro-marcas",           "target": "lib-maestro-http", "type": "uses", "label": "gateAdminMaestro() + parseBody() + responder()" },
+    { "id": "e-mmarcaid-http",  "source": "api-maestro-marcas-id",        "target": "lib-maestro-http", "type": "uses", "label": "gateAdminMaestro() + parseBody() + responder()" },
+    { "id": "e-mfam-http",      "source": "api-maestro-familias",         "target": "lib-maestro-http", "type": "uses", "label": "gateAdminMaestro() + parseBody() + responder()" },
+    { "id": "e-mfamid-http",    "source": "api-maestro-familias-id",      "target": "lib-maestro-http", "type": "uses", "label": "gateAdminMaestro() + parseBody() + responder()" },
+    { "id": "e-mesp-http",      "source": "api-maestro-especificaciones", "target": "lib-maestro-http", "type": "uses", "label": "gateAdminMaestro() + parseBody() + responder()" },
+    { "id": "e-mhttp-roles",    "source": "lib-maestro-http",             "target": "lib-roles",        "type": "uses", "label": "ROLES_ADMIN_MAESTRO" },
+    { "id": "e-mhttp-auth",     "source": "lib-maestro-http",             "target": "auth-node",        "type": "authenticates", "label": "await auth() dentro de gateAdminMaestro()" },
+
+    { "id": "e-mprod-svc",      "source": "api-maestro-productos",        "target": "svc-maestro", "type": "calls", "label": "crearProductoService()" },
+    { "id": "e-mprodid-svc",    "source": "api-maestro-productos-id",     "target": "svc-maestro", "type": "calls", "label": "actualizarProductoService()" },
+    { "id": "e-mmarca-svc",     "source": "api-maestro-marcas",           "target": "svc-maestro", "type": "calls", "label": "crearMarcaService()" },
+    { "id": "e-mmarcaid-svc",   "source": "api-maestro-marcas-id",        "target": "svc-maestro", "type": "calls", "label": "actualizarMarcaService()" },
+    { "id": "e-mfam-svc",       "source": "api-maestro-familias",         "target": "svc-maestro", "type": "calls", "label": "crearFamiliaService()" },
+    { "id": "e-mfamid-svc",     "source": "api-maestro-familias-id",      "target": "svc-maestro", "type": "calls", "label": "actualizarFamiliaService()" },
+    { "id": "e-mesp-svc",       "source": "api-maestro-especificaciones", "target": "svc-maestro", "type": "calls", "label": "guardarEspecificacionService()" },
+
+    { "id": "e-svclote-repo",   "source": "svc-lote",                  "target": "repo-calidad", "type": "calls", "label": "crearLote()" },
+    { "id": "e-svcreg-repo",    "source": "svc-registro",              "target": "repo-calidad", "type": "calls", "label": "createRegistroCalidad() / createRegistrosBatchDB()" },
+    { "id": "e-svcreg-validate","source": "svc-registro",             "target": "lib-validate-jsonb", "type": "uses", "label": "validateAgainstSchema(data, schema_json)" },
+    { "id": "e-svcpa-repo",     "source": "svc-linea-producto-activo", "target": "repo-calidad", "type": "calls", "label": "activarProductoLinea()" },
+    { "id": "e-svcpa-fecha",    "source": "svc-linea-producto-activo", "target": "lib-fecha-planta", "type": "uses", "label": "jornadaProductiva()" },
+    { "id": "e-svcmaestro-repo","source": "svc-maestro",               "target": "repo-maestro", "type": "calls", "label": "crearProducto()/actualizarProducto()/... /versionarEspecificacion()" },
+
+    { "id": "e-repocalidad-lotenumero", "source": "repo-calidad",  "target": "lib-lote-numero", "type": "uses",  "label": "generarNumeroLote() (con línea) / genérico (sin línea)" },
+    { "id": "e-lotenumero-lotept",      "source": "lib-lote-numero","target": "lib-lote-pt",     "type": "uses",  "label": "calcularFechaVencimiento() (para el bloque DD/MM/AAAA)" },
+    { "id": "e-repocalidad-orm",        "source": "repo-calidad",  "target": "orm-prisma",      "type": "query", "label": "todas las queries de Calidad" },
+    { "id": "e-repomaestro-orm",        "source": "repo-maestro",  "target": "orm-prisma",      "type": "query", "label": "todas las queries del Maestro" },
+
+    { "id": "e-orm-usuario",   "source": "orm-prisma", "target": "db-usuario",                 "type": "query", "label": "" },
+    { "id": "e-orm-linea",     "source": "orm-prisma", "target": "db-linea-productiva",         "type": "query", "label": "" },
+    { "id": "e-orm-producto",  "source": "orm-prisma", "target": "db-producto",                 "type": "query", "label": "" },
+    { "id": "e-orm-marca",     "source": "orm-prisma", "target": "db-marca",                    "type": "query", "label": "" },
+    { "id": "e-orm-familia",   "source": "orm-prisma", "target": "db-familia",                  "type": "query", "label": "" },
+    { "id": "e-orm-lote",      "source": "orm-prisma", "target": "db-lote",                     "type": "query", "label": "" },
+    { "id": "e-orm-lpe",       "source": "orm-prisma", "target": "db-linea-produccion-estado",  "type": "query", "label": "" },
+    { "id": "e-orm-lal",       "source": "orm-prisma", "target": "db-linea-activacion-log",     "type": "query", "label": "" },
+    { "id": "e-orm-regcal",    "source": "orm-prisma", "target": "db-registro-calidad",         "type": "query", "label": "" },
+    { "id": "e-orm-audreg",    "source": "orm-prisma", "target": "db-auditoria-registro",       "type": "query", "label": "" },
+    { "id": "e-orm-pc",        "source": "orm-prisma", "target": "db-punto-control",            "type": "query", "label": "" },
+    { "id": "e-orm-espec",     "source": "orm-prisma", "target": "db-especificacion-producto",  "type": "query", "label": "" },
+    { "id": "e-orm-audmae",    "source": "orm-prisma", "target": "db-auditoria-maestro",        "type": "query", "label": "" },
+    { "id": "e-orm-secdiaria", "source": "orm-prisma", "target": "db-secuencia-diaria",         "type": "query", "label": "" }
+  ],
+  "flows": [
+    {
+      "id": "flow-login",
+      "name": "Login",
+      "summary": "Autenticación con rate limiting, defensa anti-timing y revalidación periódica de sesión.",
+      "steps": [
+        { "order": 1, "nodeId": "page-login",              "edgeIdToNext": "e-login-form",      "title": "El operario abre /login",                    "detail": "Server Component simple; el formulario es un Client Component (LoginForm)." },
+        { "order": 2, "nodeId": "comp-login-form",         "edgeIdToNext": "e-login-signin",    "title": "handleSubmit() dispara signIn()",            "detail": "signIn('credentials', { email, password, redirect: false }) — NextAuth intercepta la llamada, no es un fetch manual a un route.ts propio." },
+        { "order": 3, "nodeId": "api-nextauth",            "edgeIdToNext": "e-nextauth-auth",   "title": "Handler NextAuth",                           "detail": "src/app/api/auth/[...nextauth]/route.ts expone los handlers generados por NextAuth(authConfig+providers) en src/lib/auth.ts." },
+        { "order": 4, "nodeId": "auth-node",                "edgeIdToNext": "e-authnode-rl",     "title": "authorize(): normaliza el email",            "detail": "trim().toLowerCase() — la MISMA normalización alimenta el rate limiting y el lookup en DB, para que 'Admin@x.com' no evada el límite de 'admin@x.com'." },
+        { "order": 5, "nodeId": "auth-rate-limit",          "edgeIdToNext": "e-authnode-db",     "title": "Rate limiting de login",                     "detail": "loginBloqueado(email): 5 fallos en 15 min → rechazo silencioso (null), sin volver a loguear. Detección por IP (30/15min) es solo logging, nunca bloqueo — en esta topología sin reverse proxy, bloquear por IP permitiría tumbar el login de toda la planta." },
+        { "order": 6, "nodeId": "db-usuario",               "edgeIdToNext": "e-authnode-sv",     "title": "Lookup + comparación de password",           "detail": "prisma.usuario.findUnique({email}). Si no existe/inactivo: bcrypt.compare contra un DUMMY_HASH (costo 12, igual a los reales) para igualar el tiempo de respuesta — defensa anti-enumeración por timing." },
+        { "order": 7, "nodeId": "auth-node",                "edgeIdToNext": "e-authnode-sv",     "title": "Sesión JWT — login inicial",                 "detail": "Callback jwt: con user presente (login exitoso), fija token.id/rol/validadoEn=now() sin volver a golpear la DB." },
+        { "order": 8, "nodeId": "auth-session-validation",  "edgeIdToNext": "e-sv-db",           "title": "Revalidación en requests posteriores",        "detail": "En cada request sin 'user' (sesión ya existente), validarTokenSesion() revalida contra DB máx. 1 vez/minuto (throttle) — mata el token si el usuario fue desactivado o borrado." },
+        { "order": 9, "nodeId": "db-usuario",               "edgeIdToNext": "e-sv-mw",           "title": "Chequeo activo+rol",                          "detail": "Si la DB no responde: fail-open (token intacto) — no desloguea a toda la planta por un blip de red; las escrituras siguen protegidas por FK." },
+        { "order": 10, "nodeId": "auth-middleware",         "edgeIdToNext": null,                "title": "Middleware protege el resto de la navegación", "detail": "Edge runtime, sin Prisma — usa el resultado de la sesión ya validada para permitir o redirigir a /login en cada página." }
+      ]
+    },
+    {
+      "id": "flow-activar-producto",
+      "name": "Activar producto en una línea",
+      "summary": "Asistente de 3 pasos (línea → producto → grilla) con find-or-create de Lote y guard anti-abuso.",
+      "steps": [
+        { "order": 1, "nodeId": "comp-calidad-modulo-view",   "edgeIdToNext": "e-modview-pa-post",  "title": "Operario confirma línea + producto",         "detail": "Si el producto elegido YA es el activo, no hace POST (evita ensuciar el log con una activación redundante) y pasa directo a la grilla." },
+        { "order": 2, "nodeId": "api-producto-activo",        "edgeIdToNext": "e-api-pa-svc",       "title": "POST .../producto-activo",                   "detail": "Exige sesión (401 si no). Sin gate de rol — cualquier operario autenticado puede declarar qué se está fabricando (decisión consciente, distinta del alta administrativa)." },
+        { "order": 3, "nodeId": "svc-linea-producto-activo",  "edgeIdToNext": "e-svcpa-repo",       "title": "activarProductoLineaService()",              "detail": "Zod valida {productoId:uuid}. Guard anti-abuso: cooldown 30s entre activaciones del mismo usuario/línea, máx. 5 en 10 min. Valida producto↔línea y que vidaUtilMeses > 0 (ADR-013)." },
+        { "order": 4, "nodeId": "repo-calidad",               "edgeIdToNext": "e-repocalidad-lotenumero", "title": "activarProductoLinea(): find-or-create de Lote", "detail": "Busca Lote por el unique compuesto [productoId, lineaProductivaId, fechaProduccion]; si no existe, lo crea. Ante colisión real (dos requests concurrentes), reutiliza el lote que ganó la carrera en vez de fallar con 500." },
+        { "order": 5, "nodeId": "lib-lote-numero",            "edgeIdToNext": "e-repocalidad-orm",  "title": "generarNumeroLote()",                        "detail": "Formato definitivo L-DD/MM/AAAA-AJJJ-hh:mm-ENV (ADR-013) — determinístico por minuto; reintenta con sufijo de desambiguación ante colisión real de numeroLote." },
+        { "order": 6, "nodeId": "orm-prisma",                 "edgeIdToNext": "e-orm-lpe",          "title": "Transacción atómica",                        "detail": "prisma.$transaction([...]) con dos operaciones: upsert de LineaProduccionEstado + create de LineaActivacionLog." },
+        { "order": 7, "nodeId": "db-linea-produccion-estado", "edgeIdToNext": "e-orm-lal",          "title": "Puntero mutable actualizado",                "detail": "loteActivoId, activadoPorId, activadoEn — fuente de verdad que leen los 7 formularios de captura." },
+        { "order": 8, "nodeId": "db-linea-activacion-log",    "edgeIdToNext": null,                  "title": "Historial append-only",                     "detail": "Queda registrado quién activó qué y cuándo — nunca se actualiza ni borra (trazabilidad para auditorías Arcor)." }
+      ]
+    },
+    {
+      "id": "flow-guardar-registro-batch",
+      "name": "Guardar registro de calidad (batch)",
+      "summary": "Ingesta atómica de N muestras/pallets con validación AJV contra el schema_json del punto de control.",
+      "steps": [
+        { "order": 1, "nodeId": "comp-produccion-diaria-form","edgeIdToNext": "e-form-batchhook-prod","title": "Operario completa el formulario y guarda",   "detail": "Ejemplo con Producción Diaria; el mismo camino aplica a Peso, Temperatura, Defectos, Detector de Metales y Trazabilidad Insumos." },
+        { "order": 2, "nodeId": "lib-use-batch-guardar",       "edgeIdToNext": "e-hook-batch-api",     "title": "Hook useBatchGuardar()",                     "detail": "El componente NO hace el fetch directo — delega en el hook compartido, que maneja enviando/error/éxito y el redirect post-guardado." },
+        { "order": 3, "nodeId": "api-registros-batch",         "edgeIdToNext": "e-api-batch-svc",      "title": "POST /calidad/registros/batch",              "detail": "Exige sesión (401). Body: array de registros SIN responsableId — el cliente nunca lo envía ni puede suplantarlo." },
+        { "order": 4, "nodeId": "svc-registro",                "edgeIdToNext": "e-svcreg-validate",    "title": "createRegistrosBatchService()",              "detail": "Valida array (no vacío, ≤500 items), inyecta responsableId+fuenteOrigen server-side, valida estructura con Zod. Si algún item falla, TODO el batch se rechaza con detalle por índice." },
+        { "order": 5, "nodeId": "lib-validate-jsonb",          "edgeIdToNext": "e-svcreg-repo",        "title": "validateAgainstSchema() — AJV",              "detail": "Valida el campo 'data' de cada item contra el schema_json del PuntoControl. multipleOfPrecision:9 evita falsos rechazos por precisión de floats (fix del 2026-07-24, ej. 75.3 con multipleOf:0.1)." },
+        { "order": 6, "nodeId": "repo-calidad",                "edgeIdToNext": "e-repocalidad-orm",    "title": "createRegistrosBatchDB()",                   "detail": "Dentro de una única transacción (todo o nada, HACCP): agrupa filas por pallet/muestra, asigna un correlativo atómico vía SecuenciaDiaria (INSERT...ON CONFLICT), crea RegistroCalidad + AuditoriaRegistro por fila." },
+        { "order": 7, "nodeId": "db-secuencia-diaria",         "edgeIdToNext": "e-orm-regcal",         "title": "Correlativo atómico",                        "detail": "PK [línea, fecha, tipo] — asegura numeración server-side sin condición de carrera incluso con múltiples tablets escribiendo a la vez." },
+        { "order": 8, "nodeId": "db-registro-calidad",         "edgeIdToNext": "e-orm-audreg",         "title": "RegistroCalidad persistido",                 "detail": "Tabla de hechos HACCP. Soft-delete únicamente — nunca se borra físicamente un registro de calidad." },
+        { "order": 9, "nodeId": "db-auditoria-registro",       "edgeIdToNext": null,                    "title": "Auditoría append-only",                      "detail": "Snapshot de la acción 'crear' por cada fila, en la misma transacción — nunca se modifica ni elimina." }
+      ]
+    },
+    {
+      "id": "flow-alta-lote",
+      "name": "Alta administrativa de Lote",
+      "summary": "Building block interno gateado a roles de supervisión — fuera de la navegación principal desde ADR-012.",
+      "steps": [
+        { "order": 1, "nodeId": "page-lote-nuevo",       "edgeIdToNext": "e-lotenuevo-roles",  "title": "Server Component verifica el rol",           "detail": "tieneRol(session.user.rol, ROLES_SUPERVISION_CALIDAD) — si no cumple, muestra 'acceso denegado' sin renderizar el formulario." },
+        { "order": 2, "nodeId": "comp-alta-lote-form",   "edgeIdToNext": "e-altalote-api",     "title": "Operario completa producto + fecha + notas", "detail": "POST { productoId, fechaProduccion, notas }." },
+        { "order": 3, "nodeId": "api-lotes",             "edgeIdToNext": "e-api-lotes-svc",    "title": "POST /calidad/lotes",                        "detail": "401 sin sesión, 403 si el rol no está en ROLES_SUPERVISION_CALIDAD (admin, jefe_planta, supervisor_calidad)." },
+        { "order": 4, "nodeId": "svc-lote",              "edgeIdToNext": "e-svclote-repo",     "title": "crearLoteService()",                         "detail": "Zod valida productoId/fechaProduccion/notas. Verifica que el producto exista y esté activo." },
+        { "order": 5, "nodeId": "repo-calidad",          "edgeIdToNext": "e-repocalidad-lotenumero", "title": "crearLote() — SIN lineaCodigo",         "detail": "Al no venir línea asociada, usa el formato LEGACY GEN-{fecha}-{hora} (generarNumeroLoteGenerico), no el numeroLote definitivo del flujo de activación por línea." },
+        { "order": 6, "nodeId": "db-lote",               "edgeIdToNext": null,                  "title": "Lote persistido",                            "detail": "creadoPorId registra la autoría. Reintenta hasta 3 veces con sufijo de desambiguación ante colisión real de numeroLote." }
+      ]
+    },
+    {
+      "id": "flow-maestro-producto",
+      "name": "Maestro: alta/edición de Producto",
+      "summary": "CRUD gateado a rol admin exclusivamente, con auditoría append-only separada de la de RegistroCalidad.",
+      "steps": [
+        { "order": 1, "nodeId": "comp-productos-panel",  "edgeIdToNext": "e-prodpanel-api",   "title": "Admin completa el formulario de Producto",   "detail": "Alta → POST; edición → PATCH /:id. El componente decide el verbo/URL según esEdicion." },
+        { "order": 2, "nodeId": "api-maestro-productos", "edgeIdToNext": "e-mprod-http",      "title": "Route handler",                              "detail": "Usa el helper compartido de las 7 rutas del maestro en vez de lógica inline." },
+        { "order": 3, "nodeId": "lib-maestro-http",      "edgeIdToNext": "e-mhttp-auth",      "title": "gateAdminMaestro()",                         "detail": "Exige sesión + rol ESTRICTAMENTE admin (ROLES_ADMIN_MAESTRO) — más restrictivo que ROLES_SUPERVISION_CALIDAD del resto de Calidad. 401/403 antes de tocar el body." },
+        { "order": 4, "nodeId": "auth-node",             "edgeIdToNext": "e-mprod-svc",       "title": "await auth()",                               "detail": "Resuelve la sesión (mismo mecanismo que el resto de la app)." },
+        { "order": 5, "nodeId": "svc-maestro",           "edgeIdToNext": "e-svcmaestro-repo", "title": "crearProductoService()",                     "detail": "Zod valida el payload (sku nullable único, nombre único, FKs). verificarRefsProducto() confirma que familia/marca/línea existen antes de escribir (evita un P2003 crudo)." },
+        { "order": 6, "nodeId": "repo-maestro",          "edgeIdToNext": "e-repomaestro-orm", "title": "crearProducto()",                            "detail": "prisma.$transaction: create del Producto + auditar() en la misma transacción." },
+        { "order": 7, "nodeId": "db-producto",           "edgeIdToNext": "e-orm-audmae",      "title": "Producto persistido",                        "detail": "Entra al catálogo consumido por toda la captura de Calidad (selector de producto activo, especificaciones, etc.)." },
+        { "order": 8, "nodeId": "db-auditoria-maestro",  "edgeIdToNext": null,                 "title": "Auditoría append-only del maestro",          "detail": "Snapshot antes/después. Tabla SEPARADA de AuditoriaRegistro (esa es la de RegistroCalidad) — nunca se modifica ni elimina." }
+      ]
+    }
+  ]
+}
+</script>
+
+<!-- ============================= UI ============================= -->
+
+<header class="border-b border-white/10 bg-[#0d1016]/90 backdrop-blur sticky top-0 z-30">
+  <div class="max-w-[1500px] mx-auto px-5 py-4 flex flex-wrap items-center gap-4 justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-[#E1000F] flex items-center justify-center font-bold text-white shrink-0">LC</div>
+      <div>
+        <h1 class="text-base font-bold text-white leading-tight" id="proj-title">Arquitectura</h1>
+        <p class="text-xs text-slate-400" id="proj-desc">Control de Producción — La Cumbre</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2 text-[11px] text-slate-400 flex-wrap" id="stack-badges"></div>
+  </div>
+</header>
+
+<main class="max-w-[1500px] mx-auto px-5 py-5">
+
+  <!-- Flow selector -->
+  <section class="mb-4">
+    <div class="flex items-center gap-2 flex-wrap" id="flow-pills">
+      <span class="text-[11px] font-bold uppercase tracking-wide text-slate-500 mr-1">Flujos:</span>
+    </div>
+  </section>
+
+  <div class="grid grid-cols-1 lg:grid-cols-[1fr_340px] gap-4">
+
+    <!-- Diagram -->
+    <section class="bg-[#0d1016] border border-white/10 rounded-2xl overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-2.5 border-b border-white/10">
+        <div class="flex items-center gap-1.5 flex-wrap" id="legend"></div>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button id="zoom-out" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-sm font-bold">–</button>
+          <span id="zoom-label" class="text-xs text-slate-400 w-10 text-center">100%</span>
+          <button id="zoom-in" class="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-sm font-bold">+</button>
+        </div>
+      </div>
+      <div id="viewport" class="relative overflow-auto" style="height:72vh;">
+        <div id="spacer" style="position:relative;">
+          <div id="stage" style="position:absolute; top:0; left:0; transform-origin: 0 0;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Side panel -->
+    <aside class="space-y-3">
+      <div id="panel-empty" class="bg-[#0d1016] border border-white/10 rounded-2xl p-4 text-sm text-slate-400 fade-in">
+        Elegí un <b class="text-slate-200">flujo</b> arriba para recorrerlo paso a paso, o hacé click en cualquier nodo del diagrama para ver su detalle.
+      </div>
+
+      <div id="panel-flow" class="hidden bg-[#0d1016] border border-white/10 rounded-2xl p-4 fade-in">
+        <div class="flex items-start justify-between gap-2 mb-1">
+          <h2 id="flow-name" class="text-sm font-bold text-white"></h2>
+          <button id="flow-close" class="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+        </div>
+        <p id="flow-summary" class="text-xs text-slate-400 mb-3"></p>
+        <div class="flex items-center justify-between mb-2">
+          <span id="step-progress" class="text-[11px] font-mono text-slate-500"></span>
+          <div class="flex gap-1.5">
+            <button id="step-prev" class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-slate-300">← Prev</button>
+            <button id="step-next" class="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-slate-300">Next →</button>
+          </div>
+        </div>
+        <div class="bg-black/30 border border-amber-400/30 rounded-xl p-3 mb-3">
+          <p id="step-title" class="text-sm font-semibold text-amber-300 mb-1"></p>
+          <p id="step-detail" class="text-xs text-slate-300 leading-relaxed"></p>
+          <p id="step-file" class="text-[10px] font-mono text-slate-500 mt-2"></p>
+        </div>
+        <ol id="step-list" class="space-y-1 max-h-[260px] overflow-y-auto scrollbox pr-1"></ol>
+      </div>
+
+      <div id="panel-node" class="hidden bg-[#0d1016] border border-white/10 rounded-2xl p-4 fade-in">
+        <div class="flex items-start justify-between gap-2">
+          <h2 id="node-label" class="text-sm font-bold text-white"></h2>
+          <button id="node-close" class="text-slate-500 hover:text-slate-300 text-xs">✕</button>
+        </div>
+        <p id="node-layer" class="text-[11px] font-semibold mt-1"></p>
+        <p id="node-file" class="text-[10.5px] font-mono text-slate-500 mt-2 break-all"></p>
+        <p id="node-desc" class="text-xs text-slate-300 mt-3 leading-relaxed"></p>
+        <div class="mt-3 pt-3 border-t border-white/10">
+          <p class="text-[10px] font-bold uppercase text-slate-500 mb-1.5">Conexiones</p>
+          <ul id="node-edges" class="text-[11px] text-slate-400 space-y-1"></ul>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="mt-6 text-center text-[11px] text-slate-500 space-y-1">
+    <p>Generado a partir del código real del repo (exploración estática, sin ejecutar nada) — <span id="gen-date"></span>.</p>
+    <p>Grafo estructurado equivalente para agentes IA: <code class="text-slate-400">docs/architecture-graph.json</code></p>
+  </footer>
+</main>
+
+<script>
+const GRAPH = JSON.parse(document.getElementById('graph-data').textContent);
+const NODE_W = 210, NODE_H = 56;
+const layerColor = {}; GRAPH.layers.forEach(l => layerColor[l.id] = l.color);
+const nodesById = {}; GRAPH.nodes.forEach(n => nodesById[n.id] = n);
+const edgesById = {}; GRAPH.edges.forEach(e => edgesById[e.id] = e);
+
+// ---------- header ----------
+document.getElementById('proj-title').textContent = GRAPH.meta.project;
+document.getElementById('proj-desc').textContent = GRAPH.meta.description;
+document.getElementById('gen-date').textContent = GRAPH.meta.generatedAt;
+document.getElementById('stack-badges').innerHTML = GRAPH.meta.stack
+  .map(s => `<span class="px-2 py-0.5 rounded-full bg-white/5 border border-white/10">${s}</span>`).join('');
+
+// ---------- legend ----------
+document.getElementById('legend').innerHTML = GRAPH.layers.map(l =>
+  `<button data-layer="${l.id}" class="legend-btn flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-white/5 transition">
+     <span class="legend-dot" style="background:${l.color}"></span>
+     <span class="text-[11px] text-slate-300">${l.label}</span>
+   </button>`
+).join('');
+
+// ---------- column headers ----------
+const columnHeaders = [
+  { x: 40,   label: 'PÁGINAS',      color: layerColor['ui-page'] },
+  { x: 340,  label: 'COMPONENTES',  color: layerColor['ui-component'] },
+  { x: 640,  label: 'API ROUTES',   color: layerColor['api'] },
+  { x: 940,  label: 'SERVICES',     color: layerColor['service'] },
+  { x: 1240, label: 'REPOSITORY',   color: layerColor['repository'] },
+  { x: 1540, label: 'PRISMA',       color: layerColor['orm'] },
+  { x: 1780, label: 'DATABASE',     color: layerColor['database'] },
+];
+const bandHeaders = [
+  { x: 40, y: 1420-26, label: 'AUTH & MIDDLEWARE', color: layerColor['auth'] },
+  { x: 40, y: 1540-26, label: 'LIB COMPARTIDA / HOOKS', color: layerColor['shared-lib'] },
+];
+
+// ---------- build stage ----------
+const stage = document.getElementById('stage');
+stage.style.width = GRAPH.meta.canvas.width + 'px';
+stage.style.height = GRAPH.meta.canvas.height + 'px';
+
+columnHeaders.forEach(h => {
+  const el = document.createElement('div');
+  el.className = 'col-header';
+  el.style.left = h.x + 'px'; el.style.top = '0px'; el.style.color = h.color;
+  el.textContent = h.label;
+  stage.appendChild(el);
+});
+bandHeaders.forEach(h => {
+  const el = document.createElement('div');
+  el.className = 'col-header';
+  el.style.left = h.x + 'px'; el.style.top = h.y + 'px'; el.style.color = h.color;
+  el.textContent = h.label;
+  stage.appendChild(el);
+});
+
+// SVG layer for edges
+const svgNS = 'http://www.w3.org/2000/svg';
+const svg = document.createElementNS(svgNS, 'svg');
+svg.setAttribute('width', GRAPH.meta.canvas.width);
+svg.setAttribute('height', GRAPH.meta.canvas.height);
+svg.style.position = 'absolute'; svg.style.top = '0'; svg.style.left = '0'; svg.style.pointerEvents = 'none';
+stage.appendChild(svg);
+
+function center(node) { return { x: node.x + NODE_W/2, y: node.y + NODE_H/2 }; }
+
+function edgePath(e) {
+  const s = nodesById[e.source], t = nodesById[e.target];
+  if (!s || !t) return null;
+  const p1 = center(s), p2 = center(t);
+  const dx = p2.x - p1.x;
+  const c1x = p1.x + dx*0.5, c1y = p1.y;
+  const c2x = p2.x - dx*0.5, c2y = p2.y;
+  return `M ${p1.x},${p1.y} C ${c1x},${c1y} ${c2x},${c2y} ${p2.x},${p2.y}`;
+}
+
+const edgeEls = {};
+GRAPH.edges.forEach(e => {
+  const d = edgePath(e);
+  if (!d) return;
+  const path = document.createElementNS(svgNS, 'path');
+  path.setAttribute('d', d);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#4b5563');
+  path.setAttribute('stroke-width', '1.3');
+  path.setAttribute('opacity', '0.22');
+  path.style.transition = 'opacity .25s ease, stroke .25s ease, stroke-width .25s ease';
+  svg.appendChild(path);
+  edgeEls[e.id] = path;
+});
+
+// Node cards
+const nodeEls = {};
+GRAPH.nodes.forEach(n => {
+  const el = document.createElement('div');
+  el.className = 'node-card';
+  el.style.left = n.x + 'px'; el.style.top = n.y + 'px';
+  el.style.borderLeftColor = layerColor[n.layer];
+  el.innerHTML = `<div class="lbl">${n.label}</div><div class="file" title="${n.file}">${n.file}</div>`;
+  el.addEventListener('click', () => selectNode(n.id));
+  stage.appendChild(el);
+  nodeEls[n.id] = el;
+});
+
+// ---------- zoom ----------
+let zoom = 1;
+const viewport = document.getElementById('viewport');
+const spacer = document.getElementById('spacer');
+function applyZoom() {
+  stage.style.transform = `scale(${zoom})`;
+  spacer.style.width = (GRAPH.meta.canvas.width * zoom) + 'px';
+  spacer.style.height = (GRAPH.meta.canvas.height * zoom) + 'px';
+  document.getElementById('zoom-label').textContent = Math.round(zoom*100) + '%';
+}
+document.getElementById('zoom-in').onclick = () => { zoom = Math.min(1.4, zoom + 0.1); applyZoom(); };
+document.getElementById('zoom-out').onclick = () => { zoom = Math.max(0.35, zoom - 0.1); applyZoom(); };
+zoom = 0.62; applyZoom(); // vista inicial: todo el grafo visible
+
+// ---------- flow pills ----------
+const pillsWrap = document.getElementById('flow-pills');
+GRAPH.flows.forEach(f => {
+  const btn = document.createElement('button');
+  btn.className = 'pill bg-white/5 text-slate-200';
+  btn.textContent = f.name;
+  btn.dataset.flow = f.id;
+  btn.addEventListener('click', () => selectFlow(f.id));
+  pillsWrap.appendChild(btn);
+});
+const resetBtn = document.createElement('button');
+resetBtn.className = 'pill bg-transparent text-slate-500 border-dashed';
+resetBtn.textContent = '↺ Ver todo';
+resetBtn.addEventListener('click', clearAll);
+pillsWrap.appendChild(resetBtn);
+
+// ---------- state / highlighting ----------
+let activeFlow = null, stepIndex = 0;
+
+function clearAll() {
+  activeFlow = null;
+  document.querySelectorAll('.pill').forEach(p => p.classList.remove('active'));
+  Object.values(nodeEls).forEach(el => { el.classList.remove('dim','flow-active','flow-current'); });
+  Object.values(edgeEls).forEach(el => { el.setAttribute('stroke', '#4b5563'); el.setAttribute('opacity','0.22'); el.setAttribute('stroke-width','1.3'); el.classList.remove('edge-flow'); });
+  document.getElementById('panel-flow').classList.add('hidden');
+  document.getElementById('panel-node').classList.add('hidden');
+  document.getElementById('panel-empty').classList.remove('hidden');
+}
+
+function neighborsOf(nodeId) {
+  return GRAPH.edges.filter(e => e.source === nodeId || e.target === nodeId);
+}
+
+function selectNode(nodeId) {
+  if (activeFlow) return; // durante un flujo, los clicks no rompen el recorrido
+  const n = nodesById[nodeId];
+  const related = neighborsOf(nodeId);
+  const relatedIds = new Set([nodeId]);
+  related.forEach(e => { relatedIds.add(e.source); relatedIds.add(e.target); });
+
+  Object.entries(nodeEls).forEach(([id, el]) => {
+    el.classList.toggle('dim', !relatedIds.has(id));
+    el.classList.toggle('flow-active', id === nodeId);
+  });
+  Object.entries(edgeEls).forEach(([id, el]) => {
+    const e = edgesById[id];
+    const on = e.source === nodeId || e.target === nodeId;
+    el.setAttribute('opacity', on ? '0.9' : '0.05');
+    el.setAttribute('stroke', on ? layerColor[n.layer] : '#4b5563');
+    el.setAttribute('stroke-width', on ? '2' : '1.3');
+  });
+
+  document.getElementById('panel-empty').classList.add('hidden');
+  document.getElementById('panel-flow').classList.add('hidden');
+  const panel = document.getElementById('panel-node');
+  panel.classList.remove('hidden');
+  document.getElementById('node-label').textContent = n.label;
+  document.getElementById('node-layer').innerHTML = `<span style="color:${layerColor[n.layer]}">● ${GRAPH.layers.find(l=>l.id===n.layer).label}</span>`;
+  document.getElementById('node-file').textContent = n.file;
+  document.getElementById('node-desc').textContent = n.description;
+  document.getElementById('node-edges').innerHTML = related.map(e => {
+    const other = e.source === nodeId ? e.target : e.source;
+    const dir = e.source === nodeId ? '→' : '←';
+    const label = nodesById[other] ? nodesById[other].label : other;
+    return `<li class="cursor-pointer hover:text-slate-200" data-goto="${other}">${dir} <b>${label}</b> <span class="text-slate-600">(${e.type})</span></li>`;
+  }).join('');
+  document.getElementById('node-edges').querySelectorAll('[data-goto]').forEach(li => {
+    li.addEventListener('click', () => selectNode(li.dataset.goto));
+  });
+  document.getElementById('node-close').onclick = clearAll;
+  scrollNodeIntoView(nodeId);
+}
+
+function scrollNodeIntoView(nodeId) {
+  const n = nodesById[nodeId];
+  const cx = (n.x + NODE_W/2) * zoom, cy = (n.y + NODE_H/2) * zoom;
+  viewport.scrollTo({
+    left: Math.max(0, cx - viewport.clientWidth/2),
+    top: Math.max(0, cy - viewport.clientHeight/2),
+    behavior: 'smooth'
+  });
+}
+
+function selectFlow(flowId) {
+  activeFlow = GRAPH.flows.find(f => f.id === flowId);
+  stepIndex = 0;
+  document.querySelectorAll('.pill').forEach(p => p.classList.toggle('active', p.dataset.flow === flowId));
+
+  const pathNodeIds = new Set(activeFlow.steps.map(s => s.nodeId));
+  const pathEdgeIds = new Set(activeFlow.steps.map(s => s.edgeIdToNext).filter(Boolean));
+
+  Object.entries(nodeEls).forEach(([id, el]) => {
+    el.classList.remove('flow-current');
+    el.classList.toggle('dim', !pathNodeIds.has(id));
+    el.classList.toggle('flow-active', pathNodeIds.has(id));
+  });
+  Object.entries(edgeEls).forEach(([id, el]) => {
+    const on = pathEdgeIds.has(id);
+    el.setAttribute('opacity', on ? '0.95' : '0.04');
+    el.setAttribute('stroke', on ? '#ef4444' : '#4b5563');
+    el.setAttribute('stroke-width', on ? '2.4' : '1.3');
+    el.classList.toggle('edge-flow', on);
+  });
+
+  document.getElementById('panel-empty').classList.add('hidden');
+  document.getElementById('panel-node').classList.add('hidden');
+  document.getElementById('panel-flow').classList.remove('hidden');
+  document.getElementById('flow-name').textContent = activeFlow.name;
+  document.getElementById('flow-summary').textContent = activeFlow.summary;
+  document.getElementById('flow-close').onclick = clearAll;
+
+  document.getElementById('step-list').innerHTML = activeFlow.steps.map((s, i) =>
+    `<li data-idx="${i}" class="step-item text-[11px] px-2 py-1.5 rounded-lg cursor-pointer hover:bg-white/5 flex gap-2">
+       <span class="font-mono text-slate-500">${i+1}</span>
+       <span class="text-slate-300">${nodesById[s.nodeId].label}</span>
+     </li>`
+  ).join('');
+  document.getElementById('step-list').querySelectorAll('.step-item').forEach(li => {
+    li.addEventListener('click', () => { stepIndex = parseInt(li.dataset.idx); renderStep(); });
+  });
+
+  renderStep();
+}
+
+function renderStep() {
+  const steps = activeFlow.steps;
+  const s = steps[stepIndex];
+  const n = nodesById[s.nodeId];
+
+  Object.entries(nodeEls).forEach(([id]) => nodeEls[id].classList.remove('flow-current'));
+  nodeEls[s.nodeId].classList.add('flow-current');
+  scrollNodeIntoView(s.nodeId);
+
+  document.getElementById('step-progress').textContent = `Paso ${stepIndex+1} / ${steps.length}`;
+  document.getElementById('step-title').textContent = `${stepIndex+1}. ${s.title}`;
+  document.getElementById('step-detail').textContent = s.detail;
+  document.getElementById('step-file').textContent = n.file;
+
+  document.getElementById('step-list').querySelectorAll('.step-item').forEach((li, i) => {
+    li.classList.toggle('bg-red-500/15', i === stepIndex);
+    li.classList.toggle('text-red-300', i === stepIndex);
+  });
+
+  document.getElementById('step-prev').disabled = stepIndex === 0;
+  document.getElementById('step-next').disabled = stepIndex === steps.length - 1;
+  document.getElementById('step-prev').classList.toggle('opacity-30', stepIndex === 0);
+  document.getElementById('step-next').classList.toggle('opacity-30', stepIndex === steps.length - 1);
+}
+
+document.getElementById('step-prev').addEventListener('click', () => { if (stepIndex > 0) { stepIndex--; renderStep(); } });
+document.getElementById('step-next').addEventListener('click', () => { if (stepIndex < activeFlow.steps.length - 1) { stepIndex++; renderStep(); } });
+
+// legend click -> focus layer
+document.querySelectorAll('.legend-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    if (activeFlow) clearAll();
+    const layer = btn.dataset.layer;
+    const isFocused = btn.classList.contains('ring-2');
+    document.querySelectorAll('.legend-btn').forEach(b => b.classList.remove('ring-2','ring-white/30'));
+    if (isFocused) { clearAll(); return; }
+    btn.classList.add('ring-2','ring-white/30');
+    Object.entries(nodeEls).forEach(([id, el]) => el.classList.toggle('dim', nodesById[id].layer !== layer));
+    Object.values(edgeEls).forEach(el => el.setAttribute('opacity','0.04'));
+    document.getElementById('panel-empty').classList.remove('hidden');
+    document.getElementById('panel-flow').classList.add('hidden');
+    document.getElementById('panel-node').classList.add('hidden');
+  });
+});
+
+// initial center scroll
+setTimeout(() => { viewport.scrollTo({ left: 0, top: 0 }); }, 50);
+</script>
+</body>
+</html>

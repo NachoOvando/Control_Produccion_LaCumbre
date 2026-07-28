@@ -1,10 +1,12 @@
 "use client";
 import { hoyPlanta, horaPlanta } from "@/lib/calidad/fecha-planta";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
 import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
@@ -94,20 +96,31 @@ const CAMPO_TIEMPO_TUNEL = "__tiempo_tunel__";
 export function TemperaturaForm({ puntoControlId, lineaProductivaId, tipoFormulario, productoActivo }: Props) {
   const { data: session } = useSession();
   const [refreshKey, setRefreshKey] = useState(0);
-  const { enviando, error, exito, guardar } = useBatchGuardar("/calidad", () => setRefreshKey((k) => k + 1));
-  const { registros: registrosHoy, cargando: cargandoHoy, esDemo } = useRegistrosDelDia(puntoControlId, lineaProductivaId, refreshKey);
 
   const config = CONFIGS[tipoFormulario];
   const tipoDefault = config.tipoOpciones[0]?.valor ?? "";
 
   const loteId = productoActivo.loteId;
-  const [muestras, setMuestras] = useState<MuestraTemp[]>([crearMuestra(1, tipoDefault, config.campos)]);
-  const [muestraActivaId, setMuestraActivaId] = useState(1);
+  const storageKey = claveProgresoMuestras({ lineaProductivaId, loteId, puntoControlId });
+  const [muestras, setMuestras, limpiarMuestras] = usePersistedState<MuestraTemp[]>(
+    `${storageKey}:muestras`,
+    () => [crearMuestra(1, tipoDefault, config.campos)]
+  );
+  const [muestraActivaId, setMuestraActivaId] = useState(
+    () => muestras[muestras.length - 1]?.id ?? 1
+  );
   const [campoActivo, setCampoActivo] = useState<string | null>(null); // key del campo
   const [errorValidacion, setErrorValidacion] = useState<string | null>(null);
 
   // Tiempo de túnel: una vez por jornada. Si ya hay uno hoy, se muestra; editable.
-  const [tiempoTunel, setTiempoTunel] = useState("");
+  const [tiempoTunel, setTiempoTunel, limpiarTunel] = usePersistedState<string>(`${storageKey}:tunel`, "");
+
+  const { enviando, error, exito, guardar } = useBatchGuardar("/calidad", () => {
+    setRefreshKey((k) => k + 1);
+    limpiarMuestras();
+    limpiarTunel();
+  });
+  const { registros: registrosHoy, cargando: cargandoHoy, esDemo } = useRegistrosDelDia(puntoControlId, lineaProductivaId, refreshKey);
   const tunelRegistradoHoy = useMemo(() => {
     for (const r of registrosHoy) {
       const t = r.data?.tiempo_tunel_min;
@@ -120,6 +133,15 @@ export function TemperaturaForm({ puntoControlId, lineaProductivaId, tipoFormula
 
   const muestraActiva = muestras.find((m) => m.id === muestraActivaId)!;
   const muestraActivaIdx = muestras.findIndex((m) => m.id === muestraActivaId);
+
+  // Contador de IDs independiente del ciclo de render: un `setMuestras(prev => ...)`
+  // no garantiza ejecutar su callback sincrónicamente, así que no sirve para derivar
+  // un id a usar en la misma línea (ver doble-tap en "+ Muestra"). Se inicializa una
+  // sola vez a partir del máximo id restaurado de sessionStorage.
+  const nextMuestraIdRef = useRef<number | null>(null);
+  if (nextMuestraIdRef.current === null) {
+    nextMuestraIdRef.current = Math.max(0, ...muestras.map((m) => m.id)) + 1;
+  }
 
   const updateMuestra = useCallback((patch: Partial<MuestraTemp>) => {
     setMuestras((prev) => prev.map((m) => (m.id === muestraActivaId ? { ...m, ...patch } : m)));
@@ -148,7 +170,7 @@ export function TemperaturaForm({ puntoControlId, lineaProductivaId, tipoFormula
   };
 
   const agregarMuestra = () => {
-    const nuevoId = Math.max(...muestras.map((m) => m.id)) + 1;
+    const nuevoId = nextMuestraIdRef.current!++;
     const nueva = crearMuestra(nuevoId, muestraActiva.tipo_producto, config.campos);
     nueva.hora = horaPlanta();
     setMuestras((prev) => [...prev, nueva]);
@@ -175,6 +197,8 @@ export function TemperaturaForm({ puntoControlId, lineaProductivaId, tipoFormula
       }
     }
     setErrorValidacion(null);
+
+    if (!window.confirm("Vas a guardar la jornada y salir de este punto de control. ¿Confirmás?")) return;
 
     const hoy = hoyPlanta();
     const registros = muestras.map((m, idx) => {
