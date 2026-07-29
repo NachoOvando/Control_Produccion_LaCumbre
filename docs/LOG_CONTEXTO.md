@@ -6,6 +6,17 @@
 
 ---
 
+### [2026-07-29] - Limpieza total de datos operativos de prueba (pre-producción)
+
+- **Contexto:** todos los datos operativos hoy en la Supabase real eran de pruebas de desarrollo — mismo usuario (Ignacio Ovando), sin ningún dato de un cliente/operario real todavía. El usuario pidió una forma de borrar/marcar esos datos por "no ser operativos" antes de arrancar producción real.
+- **Decisión (confirmada con el usuario):** borrado real (hard delete), no soft-delete — es basura de desarrollo sin valor HACCP, no un error de un operario real. Limpieza puntual única, **no** se construyó ninguna funcionalidad permanente de borrado/marcado (el usuario lo pidió explícitamente así: "solo limpieza puntual ahora").
+- **Ejecutado en una sola transacción**, respetando el orden de FKs (todas `ON DELETE RESTRICT`): `auditoria_registros` (15) → `registros_calidad` (15) → `linea_produccion_estado` (3, los punteros activos de Línea 0/1/3) → `linea_activacion_log` (24) → `lote_estado_log` (0) → `secuencias_diarias` (5, para que el primer pallet/muestra real arranque en 1, no donde quedó la prueba) → `lotes` (18, el 100% de los lotes existentes). Verificado: las 7 tablas en 0 después; `productos` (106) y `usuarios` (6) intactos — el maestro no se tocó.
+- **Efecto colateral esperado, no un bug:** las 4 líneas productivas quedan "sin producto activo" — verificado en browser, la Línea 3 vuelve a pedir elegir producto desde cero, sin errores de consola.
+- **Hallazgo de mecanismo existente pero nunca conectado** (relevante para el día que se quiera una función de borrado permanente en vez de un script puntual): `softDeleteRegistro` (`src/db/calidad.repository.ts:370-398`) ya existe completo — `deletedAt`/`deletedById` + fila de auditoría en la misma transacción — pero **cero call-sites**, ningún endpoint ni botón lo usa. Las queries de lectura de `RegistroCalidad` ya filtran por `deletedAt: null`, así que conectarlo es más barato que construirlo de cero. `Lote` y `LineaActivacionLog`/`LineaProduccionEstado` no tienen ningún mecanismo de invalidación hoy (ni soft-delete ni estado "anulado/prueba") — si se pide una función permanente más adelante, hay que diseñarla, no existe nada que cablear.
+- **No se tocó:** `auditoria_maestro` (2 filas, ediciones del maestro de productos) — fuera del alcance que definió el usuario.
+
+---
+
 ### [2026-07-24] - Bug crítico transversal: AJV rechazaba valores decimales válidos por precisión de floats (`multipleOf: 0.1`)
 
 - **Contexto:** el usuario reportó `400 Bad Request` en "Control Temperatura Condensación Túnel" ("2 registro(s) con datos inválidos"). El body del error mostraba `"Campo 'peso': must be multiple of 0.1, Campo 'temp_ambiente': must be multiple of 0.1"` para valores perfectamente normales (75.3, 18.2).
