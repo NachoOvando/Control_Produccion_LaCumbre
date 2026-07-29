@@ -13,6 +13,15 @@ Antes de asumir en qué está el proyecto:
    confirmación, NO continuar con nueva lógica de negocio o cambios
    estructurales hasta resolver eso primero
 
+## Flujo de ramas git (desde 2026-07-29)
+
+Todo el trabajo se hace en la rama **`Dev`** — commits directos ahí, no en `main`.
+`main` es el estado definitivo/estable: solo se actualiza cuando el usuario decide
+explícitamente que algo de `Dev` está listo, vía **merge commit** (`git checkout
+main && git merge Dev && git push`) — sin squash, sin rebase, conserva el historial
+completo de `Dev`. No asumas que hay que commitear a `main` por default; si no está
+claro en qué rama parar, preguntale al usuario antes de pushear.
+
 ## Exploración del codebase: usar Graphify primero
 
 Este repo tiene un grafo de conocimiento local en `graphify-out/` (gitignoreado,
