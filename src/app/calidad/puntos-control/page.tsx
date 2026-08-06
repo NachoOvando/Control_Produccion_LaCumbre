@@ -15,7 +15,9 @@ const LINEAS_DEMO = [
     nombre: "Línea 3",
     descripcion: "Conformado y bañado de alfajores",
     puntosControl: [
-      // Dosificado
+      // Dosificado — los tres de peso van con `activo: false` para que el modo
+      // demo refleje el mismo gate de rollout que la DB real (ver
+      // docs/modulo-calidad.md, "Habilitación de puntos de control").
       {
         id: "demo-pc-1",
         nombre: "Control Peso Alfajor",
@@ -23,6 +25,7 @@ const LINEAS_DEMO = [
         orden: 1,
         seccion: "Dosificado",
         familias: [{ slug: "alfajor", nombre: "Alfajor" }],
+        activo: false,
       },
       {
         id: "demo-pc-2",
@@ -31,6 +34,7 @@ const LINEAS_DEMO = [
         orden: 2,
         seccion: "Dosificado",
         familias: [{ slug: "alfajor", nombre: "Alfajor" }],
+        activo: false,
       },
       {
         id: "demo-pc-3",
@@ -39,6 +43,7 @@ const LINEAS_DEMO = [
         orden: 3,
         seccion: "Dosificado",
         familias: [{ slug: "alfajor", nombre: "Alfajor" }, { slug: "tapitas", nombre: "Tapitas" }],
+        activo: false,
       },
       {
         id: "demo-pc-4",
@@ -47,6 +52,7 @@ const LINEAS_DEMO = [
         orden: 4,
         seccion: "Dosificado",
         familias: [],
+        activo: true,
       },
       // Salida del Túnel
       {
@@ -56,6 +62,7 @@ const LINEAS_DEMO = [
         orden: 5,
         seccion: "Salida del Túnel",
         familias: [],
+        activo: true,
       },
       {
         id: "demo-pc-6",
@@ -64,6 +71,7 @@ const LINEAS_DEMO = [
         orden: 6,
         seccion: "Salida del Túnel",
         familias: [],
+        activo: true,
       },
       {
         id: "demo-pc-8",
@@ -72,6 +80,7 @@ const LINEAS_DEMO = [
         orden: 7,
         seccion: "Salida del Túnel",
         familias: [],
+        activo: true,
       },
       // Trazabilidad Insumos
       {
@@ -81,6 +90,7 @@ const LINEAS_DEMO = [
         orden: 8,
         seccion: "Trazabilidad Insumos",
         familias: [],
+        activo: true,
       },
     ],
   },
@@ -96,6 +106,7 @@ const LINEAS_DEMO = [
         orden: 1,
         seccion: "",
         familias: [],
+        activo: true,
       },
     ],
   },
@@ -132,6 +143,12 @@ export default async function PuntosControlPage({
         descripcion: pcl.puntoControl.descripcion ?? "",
         orden: pcl.orden,
         seccion: (pcl.puntoControl as { seccion?: string }).seccion ?? "",
+        // Gate de rollout: `activo: false` se renderiza como tarjeta en gris, no
+        // se oculta — el operario ve que el control existe pero no está
+        // habilitado todavía. El filtrado NO se hace en el repository a
+        // propósito ("qué se muestra" es negocio); el enforcement de escritura
+        // ya vive en registro.service.ts.
+        activo: pcl.puntoControl.activo,
         // Familias persistidas en puntos_control_familias — label desde DB
         familias: pcl.puntoControl.familias.map((f) => ({
           slug: f.familia.slug,

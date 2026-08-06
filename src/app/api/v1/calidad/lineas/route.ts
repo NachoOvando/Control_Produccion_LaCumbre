@@ -26,6 +26,10 @@ export async function GET() {
       descripcion: pcl.puntoControl.descripcion,
       tipoFormulario: pcl.puntoControl.tipoFormulario,
       orden: pcl.orden,
+      // Se expone pero NO se filtra: un consumidor externo tiene que poder ver
+      // que el punto de control existe y está deshabilitado, en vez de que
+      // desaparezca del payload sin explicación.
+      activo: pcl.puntoControl.activo,
     })),
   }));
 

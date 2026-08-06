@@ -121,6 +121,54 @@ describe("createRegistrosBatchService — mapeo de errores de persistencia (C6)"
   });
 });
 
+// Gate de rollout (2026-08-06): la app sale a producción con 8 de los 12 puntos
+// de control habilitados, y el resto se habilita moviendo `puntos_control.activo`
+// a mano. Que el rechazo del server sea correcto y distinguible es parte del
+// feature, no un detalle: el gate se mueve con operarios cargando.
+describe("puntos de control deshabilitados (gate de rollout)", () => {
+  beforeEach(() => {
+    esColisionMock.mockReturnValue(false);
+  });
+
+  it("rechaza el alta individual con PUNTO_CONTROL_INACTIVO", async () => {
+    puntoControlMock.mockResolvedValue({ schemaJson: {}, activo: false, nombre: "Control Peso Relleno" } as never);
+
+    const res = await createRegistroService(inputValido());
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.code).toBe("PUNTO_CONTROL_INACTIVO");
+    expect(createRegistroMock).not.toHaveBeenCalled();
+  });
+
+  it("rechaza el batch con PUNTO_CONTROL_INACTIVO, no con VALIDACION_DATOS", async () => {
+    // El operario tiene que leer "no está habilitado", no "N registro(s) con
+    // datos inválidos" — que es lo que salía cuando el inactivo caía junto a
+    // los errores de JSON Schema.
+    puntoControlFindManyMock.mockResolvedValue([
+      { id: PC_ID, schemaJson: {}, nombre: "Control Peso Relleno", activo: false },
+    ] as never);
+
+    const res = await createRegistrosBatchService([inputValido(), inputValido()], RESP_ID);
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe("PUNTO_CONTROL_INACTIVO");
+      expect(res.error).toContain("Control Peso Relleno");
+      expect(res.error).toContain("no está habilitado");
+    }
+    expect(createBatchMock).not.toHaveBeenCalled();
+  });
+
+  it("un punto de control habilitado sigue guardando normalmente", async () => {
+    createBatchMock.mockResolvedValue([{ id: "r-1" }] as never);
+
+    const res = await createRegistrosBatchService([inputValido()], RESP_ID);
+
+    expect(res.ok).toBe(true);
+    expect(createBatchMock).toHaveBeenCalled();
+  });
+});
+
 // Control de Rotura en Encajado: valida el payload real del formulario contra el
 // schema real sembrado, pasando por las DOS capas (Zod estructural + AJV sobre
 // schemaJson). schemas.test.ts cubre AJV en aislamiento; esto cubre que filaProd

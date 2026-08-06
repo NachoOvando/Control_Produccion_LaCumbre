@@ -783,6 +783,25 @@ async function main() {
     pcRoturaEncajado,
     pcPesoOpp,
   ] = await Promise.all([
+    // ── GATE DE ROLLOUT (2026-08-06) ──────────────────────────────────────────
+    // Los 4 puntos de control de peso de dosificado/baño nacen con
+    // `activo: false`: la puesta en producción arranca con 8 de los 12 puntos de
+    // control habilitados, y estos se van a ir habilitando de a poco.
+    //
+    // OJO — esto NO es lo mismo que el caso "Control Fechado de Envase" (más
+    // abajo), que está RETIRADO y lleva `activo: false` en `update` Y en
+    // `create`. Acá el flag es un gate TEMPORAL, así que va SOLO en `create`:
+    //   · DB nueva (staging/dev desde cero) → nacen deshabilitados.
+    //   · DB existente → este seed NO deshabilita ni rehabilita nada. El estado
+    //     vigente es el de la DB, y se cambia con un UPDATE puntual sobre
+    //     `puntos_control.activo` (sin redeploy: nada del código lo hardcodea).
+    //
+    // Consecuencia a tener presente: un staging re-seedeado ENCIMA de datos
+    // viejos va a mostrar los 12 habilitados, porque el `update` no toca
+    // `activo` a propósito. No "arreglar" esto agregando `activo` al `update`
+    // sin antes decidir que el gate pasó a ser permanente — se perdería la
+    // capacidad de habilitar por SQL sin que el próximo seed lo pise.
+    // Ver docs/modulo-calidad.md, sección "Habilitación de puntos de control".
     prisma.puntoControl.upsert({
       where: { nombre: "Control Peso Alfajor" },
       update: { schemaJson: schemaPesoAlfajor, tipoFormulario: TipoFormulario.peso_alfajor },
@@ -792,6 +811,7 @@ async function main() {
         modulo: ModuloApp.calidad,
         tipoFormulario: TipoFormulario.peso_alfajor,
         schemaJson: schemaPesoAlfajor,
+        activo: false,
       },
     }),
     prisma.puntoControl.upsert({
@@ -803,6 +823,7 @@ async function main() {
         modulo: ModuloApp.calidad,
         tipoFormulario: TipoFormulario.peso_relleno,
         schemaJson: schemaPesoRelleno,
+        activo: false,
       },
     }),
     prisma.puntoControl.upsert({
@@ -814,6 +835,7 @@ async function main() {
         modulo: ModuloApp.calidad,
         tipoFormulario: TipoFormulario.peso_bano,
         schemaJson: schemaPesoBano,
+        activo: false,
       },
     }),
     prisma.puntoControl.upsert({
@@ -825,6 +847,7 @@ async function main() {
         modulo: ModuloApp.calidad,
         tipoFormulario: TipoFormulario.peso_bano,
         schemaJson: schemaPesoTapas,
+        activo: false,
       },
     }),
     prisma.puntoControl.upsert({

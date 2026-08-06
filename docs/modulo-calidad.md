@@ -6,6 +6,45 @@ Reglas aprobadas por scm-alimentos. Este documento describe **qué** registra ca
 
 Todos los formularios muestran, arriba o junto a la carga, **los registros ya cargados en el día** para ese punto de control y esa línea (vía GET de registros del día — ver `api-reference.md`). El operador siempre ve qué se registró antes en su turno.
 
+## Habilitación de puntos de control (gate de rollout, desde 2026-08-06)
+
+La puesta en producción arranca con **8 de los 12** puntos de control asignados a Línea 3 habilitados. Los otros 4 se ven en la grilla **en gris, con badge "Próximamente" y sin poder abrirse** — no se ocultan: el operario tiene que ver que el control existe y todavía no está en uso, no que no existe.
+
+**Habilitados hoy:** Peso Alfajor + OPP · Rotura en Encajado · Producción Diaria · Detector de Metales (PCC1) · Trazabilidad Insumos · Temperatura Condensación Túnel · Defectos de Conformado · Temperatura Tanques.
+
+**Deshabilitados por el gate:** Control Peso Alfajor (el básico) · Peso Relleno · Peso Baño Alfajor · Peso Tapas.
+
+> **Consecuencia operativa a tener presente:** con Peso Baño Alfajor y Peso Tapas apagados **no se está midiendo peso de cobertura de chocolate** (la resta apareada descrita en `architecture.md`), y con Peso Relleno apagado no hay control de dosificado de relleno. Ningún PCC se pierde: el único es el detector de metales, y está habilitado. Habilitar el resto es una decisión de plan de calidad, no técnica.
+
+### Dos significados distintos de `activo`, no confundirlos
+
+El flag `puntos_control.activo` se usa hoy para **dos cosas opuestas**, y el discriminador es si el punto de control conserva su fila en `puntos_control_lineas`:
+
+| | `activo` | ¿fila en `puntos_control_lineas`? | Significado |
+|---|---|---|---|
+| **Retirado** (Fechado de Envase) | `false` | **no** (se borra en el seed) | Muerto. No se reactiva — ver la sección de fechado más abajo. |
+| **Gate de rollout** (los 4 de peso) | `false` | **sí** | Temporal. Se va a habilitar; por eso se ve en gris en vez de desaparecer. |
+
+### Cómo habilitar uno más
+
+Un `UPDATE` sobre la DB, **sin redeploy** — nada en el código hardcodea la lista:
+
+```sql
+UPDATE puntos_control SET activo = true WHERE nombre = 'Control Peso Relleno';
+```
+
+Cuidado con el nombre: `Control Peso Alfajor` es **prefijo** de `Control Peso Alfajor + OPP`. Usar siempre igualdad exacta, nunca `LIKE 'Control Peso Alfajor%'`, o se toca el punto de control equivocado.
+
+**El seed no interviene:** los 4 llevan `activo: false` solo en el bloque `create`, no en el `update`. Sobre una DB existente un re-seed no deshabilita ni rehabilita nada — el estado vigente es siempre el de la DB. La contracara es que un staging re-seedeado *encima de datos viejos* va a mostrar los 12 habilitados; en una DB nueva, en cambio, nacen deshabilitados.
+
+### Qué pasa si alguien intenta cargar en uno deshabilitado
+
+Está bloqueado en tres capas, porque el gate se mueve a mano y puede moverse con un operario a mitad de carga:
+
+1. **Grilla** — la tarjeta no es un link (es un `<div>`, no un `<a>` con `cursor-not-allowed`: eso sería solo cosmético en una tablet).
+2. **URL directa** — la página de captura redirige al listado antes de renderizar el formulario, así que una URL guardada no sirve.
+3. **API** — el service rechaza con `PUNTO_CONTROL_INACTIVO`, tanto en el alta individual como en el batch, y en el batch **no se guarda ningún registro** del lote enviado.
+
 ## Producción Diaria
 
 - **Pallet correlativo automático por día y por línea.** Hoy se calcula en el cliente a partir de los registros del día; el diseño objetivo lo asigna el servidor (ADR-006, pendiente).
@@ -113,7 +152,7 @@ Por eso se registra **cuántos** fallaron y **de qué tipo**, no un sí/no: para
 
 ## Fechado de envase (punto de control RETIRADO)
 
-El punto de control "Control Fechado de Envase" (`fechado_envase`) está **retirado**, no simplemente "inactivo": se siembra con `activo: false` y **no debe reactivarse**.
+El punto de control "Control Fechado de Envase" (`fechado_envase`) está **retirado**, no simplemente "inactivo": se siembra con `activo: false` y **no debe reactivarse**. No confundir este caso con los 4 puntos de control apagados por el **gate de rollout** (ver "Habilitación de puntos de control" arriba), que sí se van a habilitar: aquellos conservan su fila en `puntos_control_lineas` y este no.
 
 **Por qué importa la distinción:** desde 2026-08-06 la verificación de fechado se registra dentro de "Control Peso Alfajor + OPP" (los mismos 10 paquetes que se pesan). Si alguien reactivara el punto de control viejo, el **mismo hecho de negocio** (¿el fechado está conforme?) podría vivir en dos schemas distintos al mismo tiempo. El resultado sería peor que un error visible: cualquier reporte de fechado saldría **incompleto**, con cada mitad internamente consistente — nada avisaría que falta la otra mitad.
 

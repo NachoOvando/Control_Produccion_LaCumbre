@@ -155,16 +155,32 @@ export async function createRegistrosBatchService(
   });
   const pcMap = new Map(puntosControl.map((pc) => [pc.id, pc]));
 
+  // Punto de control deshabilitado: se corta acá, ANTES del loop de validación
+  // JSONB, y con su propio code. Si se dejara caer en `erroresJsonb` saldría
+  // como VALIDACION_DATOS con el mensaje "N registro(s) con datos inválidos",
+  // indistinguible de un fallo de JSON Schema — y el operario vería eso cuando
+  // el problema real es que le deshabilitaron el control a mitad de la carga
+  // (el gate de rollout se mueve a mano, ver docs/modulo-calidad.md). Un batch
+  // viene siempre de un solo formulario, así que un PC inactivo invalida el
+  // batch entero: no tiene sentido reportarlo por índice.
+  const inactivos = [...new Set(validos.map((v) => v.data.puntoControlId))]
+    .map((id) => pcMap.get(id))
+    .filter((pc) => pc && !pc.activo);
+  if (inactivos.length > 0) {
+    const nombres = inactivos.map((pc) => `'${pc!.nombre}'`).join(", ");
+    return {
+      ok: false,
+      error: `El punto de control ${nombres} no está habilitado. No se guardó ningún registro.`,
+      code: "PUNTO_CONTROL_INACTIVO",
+    };
+  }
+
   // Validar data JSONB de cada item
   const erroresJsonb: { index: number; error: string }[] = [];
   for (const item of validos) {
     const pc = pcMap.get(item.data.puntoControlId);
     if (!pc) {
       erroresJsonb.push({ index: item.index, error: "Punto de control no encontrado" });
-      continue;
-    }
-    if (!pc.activo) {
-      erroresJsonb.push({ index: item.index, error: `Punto de control '${pc.nombre}' está inactivo` });
       continue;
     }
     const v = validateAgainstSchema(item.data.data, pc.schemaJson);

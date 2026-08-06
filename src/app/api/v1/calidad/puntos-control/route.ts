@@ -34,6 +34,8 @@ export async function GET(req: NextRequest) {
     tipoFormulario: r.puntoControl.tipoFormulario,
     schemaJson: r.puntoControl.schemaJson,
     orden: r.orden,
+    // Se expone pero NO se filtra — ver nota equivalente en calidad/lineas.
+    activo: r.puntoControl.activo,
   }));
 
   return NextResponse.json({ data: puntosControl });

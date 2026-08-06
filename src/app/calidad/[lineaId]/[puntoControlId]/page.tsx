@@ -31,47 +31,50 @@ type Params = {
 // Datos demo para preview sin DB
 const LINEA_3 = { id: "demo-linea-1", nombre: "Línea 3" };
 
+// `activo` espeja el gate de rollout de la DB real (ver
+// docs/modulo-calidad.md): los tres de peso de dosificado están deshabilitados,
+// así el modo demo ejercita también el guard de esta misma página.
 const DEMO_RELACIONES: Record<string, {
-  puntoControl: { id: string; nombre: string; descripcion: string | null; tipoFormulario: string; schemaJson: object };
+  puntoControl: { id: string; nombre: string; descripcion: string | null; tipoFormulario: string; schemaJson: object; activo: boolean };
   lineaProductiva: { id: string; nombre: string };
 }> = {
   // Línea 3 — Dosificado
   "demo-pc-1": {
-    puntoControl: { id: "demo-pc-1", nombre: "Control Peso Alfajor", descripcion: "12 mediciones de peso sin baño y con baño", tipoFormulario: "peso_alfajor", schemaJson: {} },
+    puntoControl: { id: "demo-pc-1", nombre: "Control Peso Alfajor", descripcion: "12 mediciones de peso sin baño y con baño", tipoFormulario: "peso_alfajor", schemaJson: {}, activo: false },
     lineaProductiva: LINEA_3,
   },
   "demo-pc-2": {
-    puntoControl: { id: "demo-pc-2", nombre: "Control Peso Relleno", descripcion: "12 mediciones de peso de relleno", tipoFormulario: "peso_relleno", schemaJson: {} },
+    puntoControl: { id: "demo-pc-2", nombre: "Control Peso Relleno", descripcion: "12 mediciones de peso de relleno", tipoFormulario: "peso_relleno", schemaJson: {}, activo: false },
     lineaProductiva: LINEA_3,
   },
   "demo-pc-3": {
-    puntoControl: { id: "demo-pc-3", nombre: "Control Peso Baño", descripcion: "12 mediciones P1-P12 con T° baño y escurrimiento", tipoFormulario: "peso_bano", schemaJson: {} },
+    puntoControl: { id: "demo-pc-3", nombre: "Control Peso Baño", descripcion: "12 mediciones P1-P12 con T° baño y escurrimiento", tipoFormulario: "peso_bano", schemaJson: {}, activo: false },
     lineaProductiva: LINEA_3,
   },
   "demo-pc-4": {
-    puntoControl: { id: "demo-pc-4", nombre: "Control Temperatura Tanques", descripcion: "DDL, Bon o Bon, Cobertura 1 y 2 — 3x por día", tipoFormulario: "temperatura_tanques", schemaJson: {} },
+    puntoControl: { id: "demo-pc-4", nombre: "Control Temperatura Tanques", descripcion: "DDL, Bon o Bon, Cobertura 1 y 2 — 3x por día", tipoFormulario: "temperatura_tanques", schemaJson: {}, activo: true },
     lineaProductiva: LINEA_3,
   },
   // Línea 3 — Salida del Túnel
   "demo-pc-5": {
-    puntoControl: { id: "demo-pc-5", nombre: "Control Temperatura Condensación", descripcion: "Temperatura a la salida del túnel de enfriado", tipoFormulario: "temperatura_condensacion", schemaJson: {} },
+    puntoControl: { id: "demo-pc-5", nombre: "Control Temperatura Condensación", descripcion: "Temperatura a la salida del túnel de enfriado", tipoFormulario: "temperatura_condensacion", schemaJson: {}, activo: true },
     lineaProductiva: LINEA_3,
   },
   "demo-pc-6": {
-    puntoControl: { id: "demo-pc-6", nombre: "Detector de Metales — PCC1", descripcion: "Verificación horaria de patrones y rechazos", tipoFormulario: "detector_metales", schemaJson: {} },
+    puntoControl: { id: "demo-pc-6", nombre: "Detector de Metales — PCC1", descripcion: "Verificación horaria de patrones y rechazos", tipoFormulario: "detector_metales", schemaJson: {}, activo: true },
     lineaProductiva: LINEA_3,
   },
   "demo-pc-8": {
-    puntoControl: { id: "demo-pc-8", nombre: "Producción Diaria", descripcion: "Pallets, cajas, lote PT y tiempo de túnel", tipoFormulario: "produccion_diaria", schemaJson: {} },
+    puntoControl: { id: "demo-pc-8", nombre: "Producción Diaria", descripcion: "Pallets, cajas, lote PT y tiempo de túnel", tipoFormulario: "produccion_diaria", schemaJson: {}, activo: true },
     lineaProductiva: LINEA_3,
   },
   "demo-pc-10": {
-    puntoControl: { id: "demo-pc-10", nombre: "Trazabilidad Insumos", descripcion: "Lote en uso de cada insumo — un registro por cambio de lote", tipoFormulario: "trazabilidad_insumos", schemaJson: {} },
+    puntoControl: { id: "demo-pc-10", nombre: "Trazabilidad Insumos", descripcion: "Lote en uso de cada insumo — un registro por cambio de lote", tipoFormulario: "trazabilidad_insumos", schemaJson: {}, activo: true },
     lineaProductiva: LINEA_3,
   },
   // Línea 1
   "demo-pc-9": {
-    puntoControl: { id: "demo-pc-9", nombre: "Inspección Visual Masa", descripcion: "Control visual y de temperatura de masa", tipoFormulario: "inspeccion_visual", schemaJson: {} },
+    puntoControl: { id: "demo-pc-9", nombre: "Inspección Visual Masa", descripcion: "Control visual y de temperatura de masa", tipoFormulario: "inspeccion_visual", schemaJson: {}, activo: true },
     lineaProductiva: { id: "demo-linea-2", nombre: "Línea 1" },
   },
 };
@@ -98,7 +101,7 @@ export default async function RegistroPuntoControlPage({
   const { lineaId, puntoControlId } = await params;
 
   let relacion: {
-    puntoControl: { id: string; nombre: string; descripcion: string | null; tipoFormulario: string; schemaJson: unknown };
+    puntoControl: { id: string; nombre: string; descripcion: string | null; tipoFormulario: string; schemaJson: unknown; activo: boolean };
     lineaProductiva: { id: string; nombre: string };
   } | null = null;
 
@@ -169,6 +172,18 @@ export default async function RegistroPuntoControlPage({
   }
 
   if (!relacion) notFound();
+
+  // Gate de rollout: el punto de control existe y está asignado a la línea, pero
+  // todavía no está habilitado. Se vuelve al listado (no `notFound()`): ahí el
+  // operario ve la MISMA tarjeta que quiso abrir, en gris y con su badge — es la
+  // explicación más clara posible, y `notFound()` caería en el 404 default de
+  // Next, sin link de vuelta y sin distinguirse de un id mal tipeado.
+  //
+  // IMPORTANTE: este bloque va FUERA del try/catch de arriba. `redirect()`
+  // señaliza lanzando un error con digest NEXT_REDIRECT; adentro del catch,
+  // con DEMO_MODE=true y una relación demo válida, se lo comería y renderizaría
+  // el formulario igual.
+  if (!relacion.puntoControl.activo) redirect(`/calidad/puntos-control?linea=${lineaId}`);
 
   // No se puede entrar a un punto de control sin producto activo definido —
   // volver al selector de línea para que el operario lo elija primero.

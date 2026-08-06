@@ -13,6 +13,10 @@ type PuntoControlResumen = {
   orden: number;
   seccion?: string;
   familias?: FamiliaResumen[];
+  // Gate de rollout (`puntos_control.activo`): false → tarjeta en gris, no
+  // clickeable. No se oculta a propósito: el operario tiene que ver que el
+  // control existe y todavía no está habilitado.
+  activo: boolean;
 };
 
 type LineaResumen = {
@@ -481,7 +485,7 @@ export function CalidadModuloView({ lineas, productos, lineaInicialId }: Props) 
                     </div>
                   )}
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                    {pcs.map((pc) => (
+                    {[...pcs].sort(ordenGrilla).map((pc) => (
                       <PuntoControlCard
                         key={pc.id}
                         puntoControl={pc}
@@ -499,6 +503,15 @@ export function CalidadModuloView({ lineas, productos, lineaInicialId }: Props) 
   );
 }
 
+// Los deshabilitados van al fondo de su sección. No es cosmético: hoy los 4 del
+// gate de rollout tienen orden 1, 2, 3 y 3 — sin esto el operario ve cuatro
+// tarjetas muertas ANTES de la primera usable. El desempate por `orden` es
+// necesario: la lista llega ordenada por el `orderBy` del repository, no por un
+// sort en cliente, y este `sort` la reordena.
+function ordenGrilla(a: PuntoControlResumen, b: PuntoControlResumen): number {
+  return Number(a.activo === false) - Number(b.activo === false) || a.orden - b.orden;
+}
+
 type PuntoControlCardProps = {
   puntoControl: PuntoControlResumen;
   lineaId: string;
@@ -513,6 +526,66 @@ function PuntoControlCard({ puntoControl, lineaId }: PuntoControlCardProps) {
   // schema.prisma + migración + poblar el maestro/seed — fuera de alcance de
   // este fix menor, señalado para decisión explícita (ver AUDIT_PLAN.md).
   const esPCC = puntoControl.nombre.includes("PCC");
+  const habilitado = puntoControl.activo;
+
+  // El color del ícono está inline en el SVG, no heredado del wrapper: si solo
+  // se grisa la tarjeta, el triángulo de advertencia del PCC queda rojo sobre
+  // fondo gris y llama MÁS la atención que uno habilitado.
+  const iconoColor = habilitado ? "text-[#E1000F]" : "text-gray-400";
+  const iconoFondo = habilitado ? (esPCC ? "bg-red-100" : "bg-red-50") : "bg-gray-100";
+
+  const contenido = (
+    <>
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${iconoFondo}`}>
+        {esPCC ? (
+          <svg className={`w-6 h-6 ${iconoColor}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+          </svg>
+        ) : (
+          <svg className={`w-6 h-6 ${iconoColor}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
+          </svg>
+        )}
+      </div>
+      <div className="flex items-start gap-2">
+        <h3 className={`font-bold text-sm leading-snug ${habilitado ? "text-gray-900" : "text-gray-500"}`}>
+          {puntoControl.nombre}
+        </h3>
+        {!habilitado && (
+          <span className="flex-shrink-0 text-[10px] bg-gray-100 text-gray-500 font-semibold px-2 py-0.5 rounded-full">
+            Próximamente
+          </span>
+        )}
+      </div>
+      {puntoControl.descripcion && (
+        <p className={`text-xs mt-1 leading-relaxed line-clamp-2 ${habilitado ? "text-gray-500" : "text-gray-400"}`}>
+          {puntoControl.descripcion}
+        </p>
+      )}
+      {habilitado && (
+        <div className="mt-3 flex items-center gap-1 text-xs font-semibold text-[#E1000F]">
+          <span>Registrar</span>
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
+      )}
+    </>
+  );
+
+  // Deshabilitado: <div>, NO un <Link> con `cursor-not-allowed`. Esa clase es
+  // solo cosmética — un <a href> sigue siendo focuseable con teclado, activable
+  // con Enter y tappeable en tablet, que es justo el dispositivo de planta.
+  if (!habilitado) {
+    return (
+      <div
+        aria-disabled="true"
+        className="block bg-white rounded-2xl p-5 shadow-sm border border-white/50 opacity-60 cursor-not-allowed"
+      >
+        {contenido}
+      </div>
+    );
+  }
 
   return (
     <Link
@@ -523,29 +596,7 @@ function PuntoControlCard({ puntoControl, lineaId }: PuntoControlCardProps) {
         active:scale-95
       "
     >
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${esPCC ? "bg-red-100" : "bg-red-50"}`}>
-        {esPCC ? (
-          <svg className="w-6 h-6 text-[#E1000F]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
-          </svg>
-        ) : (
-          <svg className="w-6 h-6 text-[#E1000F]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
-        </svg>
-        )}
-      </div>
-      <h3 className="font-bold text-gray-900 text-sm leading-snug">{puntoControl.nombre}</h3>
-      {puntoControl.descripcion && (
-        <p className="text-xs text-gray-500 mt-1 leading-relaxed line-clamp-2">
-          {puntoControl.descripcion}
-        </p>
-      )}
-      <div className="mt-3 flex items-center gap-1 text-xs font-semibold text-[#E1000F]">
-        <span>Registrar</span>
-        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
-      </div>
+      {contenido}
     </Link>
   );
 }
