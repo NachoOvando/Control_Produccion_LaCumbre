@@ -6,6 +6,27 @@
 
 ---
 
+### [2026-07-29] - Flujo de ramas git: `Dev` para desarrollo, `main` definitivo
+
+- **Contexto:** hasta ahora todo el trabajo se commiteaba y pusheaba directo a `main` (única rama del repo, local y remota). El usuario pidió separar el flujo: desarrollar en una rama `Dev`, y pasar algo a `main` solo cuando lo considere definitivo.
+- **Decisiones:** rama `Dev` creada desde el HEAD de `main` y pusheada con upstream tracking. Merge `Dev` → `main` vía **merge commit normal** (`git checkout main && git merge Dev && git push`) — sin squash, sin rebase, conserva el historial completo de `Dev`. Sin Pull Requests (`gh` CLI no está instalado, y no se pidió instalarlo) — el merge es local. Documentado en `CLAUDE.md` (sección nueva "Flujo de ramas git") para que ninguna sesión futura vuelva a commitear a `main` por default.
+- **Estado al cerrar esta sesión:** checkout activo en `Dev`, un commit adelante de `main` (el propio commit que documenta este flujo).
+- **Nota sin resolver:** no se confirmó si Vercel genera Preview Deployments automáticos para `Dev` — quedó como chequeo pendiente del usuario en el panel de Vercel, no se asumió que funciona.
+
+---
+
+### [2026-07-29] - Auditoría integral de flujos CRUD + cierre parcial de veto de seguridad + fix de build en Vercel
+
+- **Contexto:** ya existía `AUDITORIA_FLUJOS_DATOS.md` (auditoría completa de CRUD con veto de `seguridad-analista` sobre 3 hallazgos críticos de autenticación: C1 contraseñas del seed vigentes en la Supabase real, C2 `AUTH_SECRET` de baja entropía, C3 vulnerabilidades sin parchear en `@auth/core`/`next-auth`). Se creó además el flujo de dos subagentes nuevos `.claude/agents/audit-planner.md` (genera plan de auditoría, nunca toca código) y `.claude/agents/fix-executor.md` (ejecuta un plan ya aprobado lote por lote, con diff + aprobación entre cada uno) — reusado en sesiones anteriores para `AUDIT_PLAN.md` (otro documento, ya cerrado).
+- **Lote 0 (cierre del veto), ejecutado en esta sesión:**
+  - **C3 — CERRADO.** `npm audit fix` (sin `--force`): `@auth/core`→`0.41.3`, `next-auth`→`5.0.0-beta.32`. 0 críticos/0 moderados en `npm audit` (quedan 12 `high` ya conocidos y aceptados: `next`→16 breaking, `postcss` atado a esa migración, `xlsx` sin fix, `brace-expansion`→eslint breaking). 110/110 tests, typecheck limpio.
+  - **C1 — código corregido, riesgo real sin resolver.** `prisma/seed.ts` deja de inventar contraseñas literales (`"password123"`/`"lacumbre"`) — lee `SEED_USER_PASSWORD` del entorno, `throw` explícito si falta. **Pero las 6 cuentas que YA existen en la Supabase real (2 `admin`) siguen aceptando las contraseñas literales viejas** — el fix de código no rota hashes ya persistidos. El usuario decidió explícitamente **no rotarlas** y aceptar el riesgo para poder seguir trabajando (ver `ESTADO-AGENTES.md` para el detalle — no volver a preguntar esto salvo que cambien las circunstancias).
+  - **C2 — secreto nuevo generado, aplicado solo en local.** `AUTH_SECRET` nuevo (`openssl rand -base64 32`, 256 bits reales) ya está en `.env.local`. Falta confirmarlo en Vercel (Production + Preview) + redeploy — sin eso, el secreto débil sigue vigente en producción.
+- **Bug de infraestructura encontrado y corregido en el camino (no relacionado al veto):** el build de Vercel fallaba con `Module '@prisma/client' has no exported member 'PrismaClient'` — `package.json` nunca corría `prisma generate` antes de `next build` (funcionaba en local solo porque se corrió manualmente varias veces en sesiones previas). Fix: `"build": "prisma generate && next build"`. Verificado con un build completo local simulando producción (`DEMO_MODE=false npm run build`) — compila y genera las 21 rutas sin errores. Nota aparte, no un bug: el mismo build con `DEMO_MODE=true` (heredado de `.env.local`) dispara correctamente el guard de boot que bloquea esa variable en producción — señal para confirmar que Vercel no tenga `DEMO_MODE` en su entorno de Production.
+- **Hallazgo de proceso:** el commit que Vercel estaba construyendo (`b528e98`) resultó ser el último que efectivamente se había pusheado a GitHub — todo el trabajo de sesiones anteriores (numeración de lote, `AUDIT_PLAN.md`, módulo de maestro, fixes de TAPAS, etc.) se había ido commiteando localmente sesión tras sesión pero nunca se pusheó hasta esta sesión. Resuelto con un push que llevó `origin/main` de `b528e98` a la punta real de una sola vez. Lección: verificar `git status -sb` (ahead/behind del remoto) al cerrar cualquier sesión que haga trabajo de varios commits, no asumir que un push anterior en la conversación se mantuvo.
+
+---
+
 ### [2026-07-29] - Limpieza total de datos operativos de prueba (pre-producción)
 
 - **Contexto:** todos los datos operativos hoy en la Supabase real eran de pruebas de desarrollo — mismo usuario (Ignacio Ovando), sin ningún dato de un cliente/operario real todavía. El usuario pidió una forma de borrar/marcar esos datos por "no ser operativos" antes de arrancar producción real.
@@ -597,4 +618,3 @@
 > **[CORTE — contenido no recuperado a partir de aquí. Ver nota de recuperación arriba.]**
 
 **Nota (2026-07-21):** el diseño de "modo tapitas" descripto en este hito de 2026-07-02 (fila manual "BAÑO", payload `mediciones_bano` + `familia: "tapitas"`) quedó **superado** por el hito de arriba del 2026-07-21 (ADR-016) — ese diseño nunca coincidió con el `schema_json` real sembrado y el guardado falló siempre para TAPAS. No usar este hito como referencia del comportamiento actual del modo Tapitas/TAPAS; ver el hito de 2026-07-21 y ADR-016 en `architecture.md`.
-</content>

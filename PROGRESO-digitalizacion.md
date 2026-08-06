@@ -5,82 +5,80 @@
 > pensando ahora, cuál es el próximo paso concreto, y qué está bloqueado.
 > Actualizalo al cerrar cada sesión, antes de cortar.
 
-**Última actualización:** 24/07/2026
+**Última actualización:** 29/07/2026
 
 ## Enfoque actual
-Recién cerrado (cadena completa scm-alimentos → arquitecto-industrial →
-implementación → seguridad-analista, sin veto, un hallazgo Alto corregido
-en el camino): bug crítico de guardado en TAPAS + relevamiento de planillas
-físicas reales de planta para ese producto. "Control Peso Baño Alfajor"
-servía dos modos de UI (alfajor / tapitas) bajo un solo `schema_json`
-compartido que nunca coincidió con el payload de tapitas — **0 registros
-se guardaron jamás para TAPAS**. Se creó un punto de control propio
-("Control Peso Tapas"), se corrigió el filtro de insumos de Trazabilidad
-por familia, se reabrió la edición del campo "Lote PT" de Producción
-Diaria (sugerido, ya no de solo lectura) y se ocultó "Peso del alfajor"
-para familias que no son Alfajor Negro. Documentado como **ADR-016** en
-`docs/architecture.md` (mismo día que ADR-015).
+
+Cerrado en esta sesión: auditoría integral de flujos CRUD
+(`AUDITORIA_FLUJOS_DATOS.md`, agentes `audit-planner`/`fix-executor` nuevos
+en `.claude/agents/`), fix del pipeline de build de Vercel (Prisma Client
+nunca se generaba — `"build": "prisma generate && next build"`), y **flujo
+de ramas nuevo: `Dev` para desarrollo, `main` solo por merge commit
+explícito cuando algo es definitivo** (documentado en `CLAUDE.md`). Trabajo
+actual parado en `Dev`, un commit adelante de `main`.
+
+**Limpieza total de datos de prueba (2026-07-29):** se borró el 100% de
+`lotes`, `registros_calidad`, `auditoria_registros`,
+`linea_produccion_estado`, `linea_activacion_log` y `secuencias_diarias` en
+la Supabase real — todo era de desarrollo, sin ningún dato de operación
+real todavía. El maestro (`productos`, `usuarios`, etc.) no se tocó. **Esto
+invalida cualquier pendiente de sesiones anteriores que dependiera de datos
+ya cargados** (ver nota en "Notas sueltas").
+
+**Decisión de riesgo aceptada explícitamente por el usuario, no un
+olvido:** el veto de `seguridad-analista` sobre C1/C2 de
+`AUDITORIA_FLUJOS_DATOS.md` sigue formalmente abierto — el usuario decidió
+NO rotar las 6 contraseñas reales de Supabase (2 `admin` incluidas) y
+aceptó el riesgo conscientemente para poder seguir trabajando en features.
+**No volver a bloquear trabajo nuevo por C1/C2 sin que haya un motivo
+nuevo** — ver `ESTADO-AGENTES.md` para el detalle completo y no repetir la
+pregunta si el usuario ya la respondió.
 
 ## Próximo paso
-0. **Revisar carga de datos en el resto de los formularios de Calidad**
-   (pendiente, 2026-07-24). Se cerraron dos bugs de guardado el mismo día:
-   fecha `vencimiento_pt` mal formateada en Producción Diaria (commit
-   `9fed382`) y, más importante, un bug **transversal** de AJV que
-   rechazaba valores decimales válidos por precisión de floats
-   (`multipleOf: 0.1` sin tolerancia — commit `3950865`, fix en
-   `validate-jsonb.ts`, afecta potencialmente a los ~25 campos decimales
-   de casi todos los `schema_json`). El segundo fix corrige todos los
-   formularios de una sola vez sin tocar la DB, pero **no se probó
-   guardado real en cada punto de control** — solo en Producción Diaria y
-   Temperatura Condensación (los dos donde el usuario reportó el error).
-   Falta confirmar en browser (guardado real, no solo lectura) que Peso
-   Alfajor, Peso Relleno, Peso Tapas, Temperatura Tanques, Detector de
-   Metales, Defectos de Conformado y Trazabilidad Insumos también guardan
-   sin 400 — especialmente los que tienen campos decimales de 1 o 2
-   decimales (`multipleOf: 0.1`/`0.01`).
-1. **Cargar `Producto.vidaUtilMeses` de TAPAS** desde `/calidad/maestro` —
-   hoy bloquea la activación de TAPAS en Línea 3 con `409
-   PRODUCTO_SIN_VIDA_UTIL` (ADR-013). Es de los 9/104 productos del
-   maestro real sin ese dato.
-2. **Cargar las `EspecificacionProducto` reales de TAPAS** (peso_tapa,
-   peso_cobertura, temp_ambiente, temp_bano) — el catálogo de parámetros
-   y los bindings ya están sembrados (15 parámetros, 18 bindings), falta
-   el dato de calidad en sí.
-3. **Definir la lista real de PCC del plan HACCP** — sigue pendiente de
-   sesiones anteriores. Bloquea marcar `esCritico: true` en la spec de
-   `temp_interna` (confirmado como PCC, pero sin spec cargada todavía) y
-   en el resto de las specs.
-4. **Probar end-to-end el guardado real de un registro en "Control Peso
-   Tapas" contra la DB** — la verificación de esta sesión fue aislada
-   (comparación de schema vs. payload, sin escritura) para no activar
-   TAPAS en la línea real sin que el usuario lo pidiera. Recomendado
-   hacerla la primera vez que se active TAPAS con el maestro completo.
-5. **Evaluar M1 antes de Arcor:** `auditoria_maestro` y `AuditoriaRegistro`
-   son append-only solo a nivel aplicación; el rol de la app todavía tiene
-   `UPDATE`/`DELETE` a nivel motor. Antes de entrar al circuito de
-   exportación Arcor, aplicar `REVOKE UPDATE, DELETE` o triggers de bloqueo.
-6. Deuda menor abierta (no bloqueante): rate limiting en los endpoints de
-   escritura del maestro (B1); TOCTOU benigno en `verificarRefsProducto`
-   (B2, da 500 en vez de 404/409 si una ref se borra en el medio); sin
-   recálculo server-side de la cobertura de tapas (mismo patrón aceptado
-   que `peso_bano`); filtro de insumos por familia sin enforcement
-   server-side; `lote_pt` sin `minLength`.
-7. Pendientes de arrastre previos: secuencias server-side para
-   pallet/muestra, RBAC por rol/línea, flujo formal de tratamiento de
-   desviación de PCC (diferido; el modelo ya deja el lugar con
-   `criticoMin/Max` + `esCritico`).
+
+0. **Ninguno de los pendientes de TAPAS/Control Peso Tapas de sesiones
+   anteriores tiene datos reales para verificar hoy** — la limpieza del
+   2026-07-29 borró todos los lotes/registros de prueba. Si se retoma esa
+   línea de trabajo, hay que volver a activar producto y cargar de cero.
+1. **Rotar las 6 contraseñas reales en Supabase + confirmar `AUTH_SECRET`
+   en Vercel** sigue siendo lo único que cerraría el veto C1/C2 del todo —
+   pendiente 100% del usuario, no bloqueante por decisión propia (ver
+   arriba). `AUTH_SECRET` nuevo ya está en `.env.local`; falta confirmar
+   Vercel (Production + Preview) + redeploy.
+2. **Cargar `Producto.vidaUtilMeses` de TAPAS** desde `/calidad/maestro` —
+   sigue bloqueando la activación de TAPAS en Línea 3 con `409
+   PRODUCTO_SIN_VIDA_UTIL` (ADR-013). Deuda de dato maestro, no de código.
+3. **Definir la lista real de PCC del plan HACCP** — pendiente de sesiones
+   anteriores, sigue abierto.
+4. **Lote 1-10 de `AUDITORIA_FLUJOS_DATOS.md` §8** — solo se ejecutaron los
+   3 puntos críticos (C1 código, C2 secreto generado, C3 cerrado). El resto
+   de los hallazgos (A1-A4, M1-M10, B1-B14) sigue sin tocar. Empezar por
+   Lote 1 (A1 — segregación de entornos: dev apunta a la DB de producción
+   con `DEMO_MODE`) tiene sentido antes de sumar más features, dado que es
+   la causa raíz de por qué toda la data de prueba terminó en la DB real.
+5. **Pedido original que motivó todo esto** (fixes de auditoría + feature
+   flags + deploy progresivo) sigue sin diseñarse — recién ahora que existe
+   `Dev` tiene sentido retomarlo ahí.
+6. Pendientes de arrastre de sesiones previas, sin cambios: `EspecificacionProducto`
+   reales de TAPAS (peso_tapa, peso_cobertura, temp_ambiente, temp_bano —
+   catálogo/bindings ya sembrados); `REVOKE UPDATE/DELETE` sobre tablas
+   append-only antes de Arcor (M6 de la auditoría, mismo tema que el
+   pendiente #5 viejo); RBAC por rol/línea.
 
 ## Bloqueadores
-Sin bloqueadores actuales.
+
+Ninguno duro. C1/C2 quedan como riesgo aceptado (ver arriba), no como
+bloqueador de trabajo nuevo.
 
 ## Notas sueltas
-- Inconsistencia de numeración ADR-014→ADR-015 en comentarios de código:
-  **CORREGIDA (2026-07-21).** Quedan dos "ADR-014" a propósito: `prisma.ts`
-  (referencia legítima al pooler) y el comentario del SQL de la migración ya
-  aplicada (no se edita para preservar el checksum de Prisma).
-- `docs/LOG_CONTEXTO.md` tiene una nota agregada al pie del hito
-  [2026-07-02] aclarando que el diseño viejo de "modo tapitas" descripto
-  ahí quedó superado por ADR-016 — no usar ese hito como referencia del
-  comportamiento actual.
-<!-- Cualquier cosa que no encaje arriba pero no querés perder -->
-</content>
+
+- **Toda referencia a datos de prueba específicos (IDs de lote, registros,
+  activaciones) de `LOG_CONTEXTO.md` anterior al 2026-07-29 ya no existe en
+  la DB** — son historia de cómo se llegó hasta acá, no datos para
+  verificar contra la base real hoy.
+- `softDeleteRegistro` (`src/db/calidad.repository.ts`) sigue completo y
+  sin ningún endpoint que lo use — si se pide una función permanente de
+  borrado/marcado de registros, es la pieza más barata de cablear.
+- Repo tiene dos ramas: `main` (definitivo) y `Dev` (desarrollo activo,
+  checkout actual). `gh` CLI no está instalado — el merge `Dev` → `main`
+  es local (`git merge`), sin Pull Requests.

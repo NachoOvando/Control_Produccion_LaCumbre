@@ -8,13 +8,25 @@
 
 ## Cadena abierta actualmente
 **Feature/tarea:** Lote 0 — cerrar el veto de `seguridad-analista` sobre
-`AUDITORIA_FLUJOS_DATOS.md` (C1, C2, C3), previo a retomar el pedido del usuario de
-fixes de auditoría + feature flags + deploy progresivo (bloqueado por el veto).
+`AUDITORIA_FLUJOS_DATOS.md` (C1, C2, C3).
 **Último agente invocado:** `seguridad-analista` (re-validación, 2026-07-27).
 **Veredicto de ese agente:** **Veto parcial — se levanta C3, siguen abiertos C1 y C2.**
-Ver detalle abajo. No corresponde retomar el pedido original del usuario (fixes de
-auditoría + feature flags + deploy) hasta que C1 y C2 queden resueltos de punta a
-punta, incluida la acción del usuario fuera del código.
+Ver detalle abajo.
+
+**ACTUALIZACIÓN 2026-07-29 — riesgo aceptado explícitamente por el usuario, cadena
+ya NO bloquea trabajo nuevo:** se le preguntó directamente si, dado que no iba a
+rotar las contraseñas (C1) ni había confirmado el secreto en Vercel (C2), quería
+seguir bloqueado o aceptar el riesgo y avanzar con features nuevas. **Respuesta
+explícita: acepta el riesgo, seguir con trabajo nuevo.** A partir de esta decisión:
+- **No preguntar esto de nuevo** en sesiones futuras salvo que cambien las
+  circunstancias (ej. el usuario menciona que sí va a rotar, o aparece un hallazgo
+  nuevo no cubierto por este veto).
+- C1/C2 siguen técnicamente "abiertos" en el registro de abajo — es intencional,
+  documenta el riesgo real que sigue existiendo en la Supabase de producción, no
+  una tarea pendiente de retomar por iniciativa propia.
+- Si en algún momento el usuario decide rotar las 6 contraseñas y confirmar
+  `AUTH_SECRET` en Vercel, corresponde volver a invocar `seguridad-analista` para
+  el cierre formal (paso 3 más abajo) — recién ahí se borra esta sección.
 
 **Re-validación de `seguridad-analista` (2026-07-27), verificada con herramientas
 propias, no solo confiando en el resumen de la sesión anterior:**
