@@ -118,8 +118,11 @@ function EspecFila({ producto, binding, spec }: { producto: ProductoRow; binding
       <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold text-gray-800">
           {binding.parametroNombre} <span className="text-xs font-normal text-gray-400">({binding.unidad})</span>
+          {/* "derivado" = el valor no existe como clave de `data`, lo calcula el
+              formulario. No implica que se evalúe al cierre: los pct_rotura_* se
+              comparan en vivo contra esta spec mientras el operario carga. */}
           {binding.agregacion === "derivado" && (
-            <span className="ml-2 text-[11px] text-amber-600">se evalúa al cierre</span>
+            <span className="ml-2 text-[11px] text-amber-600">valor calculado</span>
           )}
           {spec && <span className="ml-2 text-[11px] text-gray-400">v{spec.version}</span>}
         </p>

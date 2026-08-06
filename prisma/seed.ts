@@ -8,6 +8,11 @@ import {
 import { PrismaPg } from "@prisma/adapter-pg";
 import { config as dotenvConfig } from "dotenv";
 import bcrypt from "bcryptjs";
+// Ruta relativa, no el alias "@/": este archivo corre con tsx desde prisma/.
+// Estos dos schemas viven fuera del seed para que el test pueda validarlos contra
+// el payload literal de cada formulario (ver src/lib/calidad/schemas/schemas.test.ts).
+import { schemaRoturaEncajado } from "../src/lib/calidad/schemas/rotura-encajado.schema";
+import { schemaPesoAlfajorOpp } from "../src/lib/calidad/schemas/peso-opp.schema";
 
 // Next.js carga .env.local automáticamente; fuera de Next hay que hacerlo a mano
 dotenvConfig({ path: ".env.local" });
@@ -775,6 +780,8 @@ async function main() {
     pcDefectosConformado,
     pcInspeccionMasa,
     pcTrazabilidadInsumos,
+    pcRoturaEncajado,
+    pcPesoOpp,
   ] = await Promise.all([
     prisma.puntoControl.upsert({
       where: { nombre: "Control Peso Alfajor" },
@@ -910,8 +917,32 @@ async function main() {
         schemaJson: schemaTrazabilidadInsumos,
       },
     }),
+    prisma.puntoControl.upsert({
+      where: { nombre: "Control de Rotura en Encajado" },
+      update: { schemaJson: schemaRoturaEncajado, tipoFormulario: TipoFormulario.rotura_encajado },
+      create: {
+        nombre: "Control de Rotura en Encajado",
+        descripcion:
+          "Rotura por máquina encajadora y hora: 1 caja por máquina, 5 categorías de defecto sobre las unidades inspeccionadas.",
+        modulo: ModuloApp.calidad,
+        tipoFormulario: TipoFormulario.rotura_encajado,
+        schemaJson: schemaRoturaEncajado,
+      },
+    }),
+    prisma.puntoControl.upsert({
+      where: { nombre: "Control Peso Alfajor + OPP" },
+      update: { schemaJson: schemaPesoAlfajorOpp, tipoFormulario: TipoFormulario.peso_paquete_opp },
+      create: {
+        nombre: "Control Peso Alfajor + OPP",
+        descripcion:
+          "Peso bruto del alfajor envuelto en film OPP (control de proceso) + verificación de fechado de los mismos 10 paquetes.",
+        modulo: ModuloApp.calidad,
+        tipoFormulario: TipoFormulario.peso_paquete_opp,
+        schemaJson: schemaPesoAlfajorOpp,
+      },
+    }),
   ]);
-  console.log("✅ Puntos de control creados (12)");
+  console.log("✅ Puntos de control creados (14)");
 
   // ── Relaciones línea ↔ punto de control ────────────────────────────────────
   // Línea 3 — Conformado Alfajores (orden refleja flujo productivo)
@@ -929,6 +960,10 @@ async function main() {
     { pc: pcProduccionDiaria,    orden: 7 },
     { pc: pcDefectosConformado,  orden: 8 },
     { pc: pcTrazabilidadInsumos, orden: 9 },
+    // Estación de encajado/envasado — el punto donde el alfajor pasa a producto
+    // terminado. A propósito NO se les asigna familia (ver relacionesFamilias).
+    { pc: pcRoturaEncajado,      orden: 10 },
+    { pc: pcPesoOpp,             orden: 11 },
   ];
 
   // Eliminar la relación de fechado si quedó de un seed anterior
@@ -949,6 +984,16 @@ async function main() {
 
   // ── Familias por punto de control ───────────────────────────────────────────
   // Reemplaza el hardcodeo de familias[] del frontend demo.
+  //
+  // "Control de Rotura en Encajado" y "Control Peso Alfajor + OPP" quedan SIN
+  // familia a propósito: un PC sin familia se muestra para cualquier producto
+  // activo de la línea (CalidadModuloView). Las familias reales las crea
+  // scripts/import-maestro-productos.ts con el nombre que venga del Excel — este
+  // seed solo garantiza alfajor_negro y tapas, así que bindear a alfajor_negro
+  // ESCONDERÍA el control para cualquier otro alfajor, incluido el SKU copacker
+  // de Arcor. Si más adelante hay que excluir tapas: mirar primero qué slugs
+  // existen de verdad en la tabla, y recordar que el upsert de abajo solo agrega
+  // (hace falta un deleteMany explícito, como el de pcPesoBano↔famTapas).
   const relacionesFamilias = [
     { pc: pcPesoAlfajor, familia: famAlfajorNegro },
     { pc: pcPesoRelleno, familia: famAlfajorNegro },
@@ -1003,6 +1048,16 @@ async function main() {
     // planilla, que son condiciones ambientales, la causa). Sigue obligatorio
     // en el schema; este parámetro habilita cargarle una spec con esCritico: true.
     { clave: "temp_interna", nombre: "Temp. interna producto (PCC)", unidad: "°C" },
+    // Rotura en encajado. Son porcentajes DERIVADOS: no existen como clave en
+    // `data` (se calculan sobre los 5 contadores y unidades_muestreadas). El
+    // binding existe para que el usuario pueda cargarles la tolerancia de la ET
+    // vigente desde /maestro y verla en vivo al capturar.
+    { clave: "pct_rotura_grupo1", nombre: "Rotura grupo 1 (golpeado menor)", unidad: "%" },
+    { clave: "pct_rotura_grupo2", nombre: "Rotura grupo 2 (golpeado mayor + aplastado)", unidad: "%" },
+    { clave: "pct_rotura_total", nombre: "Rotura total (grupo 1 + grupo 2)", unidad: "%" },
+    // Peso del paquete envuelto en film OPP. Distinto de peso_alfajor (alfajor
+    // desnudo): es peso BRUTO y es control de proceso, no de contenido neto.
+    { clave: "peso_paquete_opp", nombre: "Peso paquete con OPP", unidad: "g" },
   ] as const;
 
   const paramPorClave = new Map<string, { id: string }>();
@@ -1018,8 +1073,11 @@ async function main() {
 
   // Binding: en qué campo de `data` vive cada parámetro por punto de control y
   // cómo se agrega. `array_cada` = cada elemento del array se compara contra la
-  // misma spec; `escalar` = valor único; `derivado` = no se compara en vivo, se
-  // evalúa al cierre (peso_baño es promedio de restas apareadas).
+  // misma spec; `escalar` = valor único; `derivado` = el valor no existe como
+  // clave de `data`, lo calcula el formulario (peso_baño es promedio de restas
+  // apareadas; los pct_rotura_* son contadores sobre unidades_muestreadas).
+  // `derivado` NO implica "se evalúa al cierre": los pct_rotura_* se comparan en
+  // vivo contra la spec mientras el operario carga.
   const bindings: { pc: { id: string }; clave: string; campoData: string; agregacion: "escalar" | "array_cada" | "array_promedio" | "derivado" }[] = [
     { pc: pcPesoAlfajor, clave: "peso_alfajor", campoData: "mediciones", agregacion: "array_cada" },
     { pc: pcPesoAlfajor, clave: "peso_tapa", campoData: "peso_tapa", agregacion: "escalar" },
@@ -1042,6 +1100,13 @@ async function main() {
     { pc: pcTempTanques, clave: "temp_cobertura_2", campoData: "tanque_2_cobertura", agregacion: "escalar" },
     { pc: pcProduccionDiaria, clave: "peso_alfajor", campoData: "peso_alfajor", agregacion: "escalar" },
     { pc: pcDefectosConformado, clave: "peso_neto", campoData: "filas[].peso_neto", agregacion: "array_cada" },
+    // Rotura: campoData es un nombre VIRTUAL (no hay tal clave en `data`).
+    // specDeCampo() hace match de string sobre el array de especificaciones, no
+    // lee `data`, así que el formulario le pasa el porcentaje ya calculado.
+    { pc: pcRoturaEncajado, clave: "pct_rotura_grupo1", campoData: "pct_rotura_grupo1", agregacion: "derivado" },
+    { pc: pcRoturaEncajado, clave: "pct_rotura_grupo2", campoData: "pct_rotura_grupo2", agregacion: "derivado" },
+    { pc: pcRoturaEncajado, clave: "pct_rotura_total", campoData: "pct_rotura_total", agregacion: "derivado" },
+    { pc: pcPesoOpp, clave: "peso_paquete_opp", campoData: "mediciones", agregacion: "array_cada" },
   ];
 
   for (const b of bindings) {

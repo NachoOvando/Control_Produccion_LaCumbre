@@ -35,6 +35,18 @@ La Cumbre es una empresa de manufactura alimenticia (copacker Arcor + marca prop
 - Las vistas escritas a mano requieren un desarrollador por cada punto de control nuevo → exactamente el acoplamiento que ADR-001 buscaba evitar.
 - El generador programático permite que el operador del sistema agregue puntos de control sin intervención de un desarrollador.
 
+**Corrección crítica (ADR-017, 2026-08-06) — durante meses NO existió ninguna vista.** Las vistas referenciaban `p.linea` y `p.tipo_cliente`, columnas que **nunca existieron** en `productos` (post-ADR-010 la línea de negocio vive en `marcas.linea_negocio`). Todo el DDL fallaba, el script logeaba el error en gris y **salía con código 0** diciendo "generación completada", así que nadie se enteró de que Power BI no tenía nada y que la segmentación por línea de negocio nunca llegó al consumo. Lo corregido:
+
+| Qué | Por qué |
+|---|---|
+| JOIN a `familias` y `marcas`; se expone `m.linea_negocio` | Es el requisito estructural del proyecto: distinguir copacker Arcor / marca propia / fasón. Solo lo tienen las vistas anchas por punto de control; `vw_calidad_ultima_muestra` **no trae línea de negocio** — no construir un reporte de Arcor sobre esa vista. |
+| Las fallas se cuentan y hacen `throw` al final | Un conjunto parcial de vistas no es confiable para reportar. Mejor romper ruidosamente que mentir en silencio. |
+| `DROP VIEW IF EXISTS` + `CREATE VIEW`, **sin `CASCADE`** | `CREATE OR REPLACE` no permite quitar ni reordenar columnas: agregar una propiedad en el medio de un `schema_json` fallaba con "cannot change name of view column" y dejaba la vista vieja en pie mientras Power BI la leía como si estuviera al día. Sin `CASCADE` porque borraría en silencio cualquier vista que alguien haya montado encima. |
+| Filtro `rc.deleted_at IS NULL` en las 3 vistas | Soft-delete HACCP: un registro anulado no debe salir al reporte del cliente. En `vw_calidad_ultima_muestra` es doblemente importante — sin el filtro, el `DISTINCT ON` puede elegir justo el registro anulado como "última muestra". |
+| Escapado del DDL + detección de colisión de nombres de vista | El script corre con `DIRECT_URL`, o sea el rol dueño del schema. Ver la condición de veto en `adr-017-encajado-envasado.md`. Además `toViewName` no es inyectivo: dos puntos de control que colisionen hacían que el segundo dropee y reemplace la vista del primero sin ningún error. |
+
+**Criterio de aceptación para cualquier cambio futuro acá:** correr `npm run db:views` contra una base real y verificar que las vistas existan. Que el script termine sin error ya no es suficiente prueba — ahora lo es, pero durante meses no lo fue.
+
 ---
 
 ## ADR-003: API versionada desde el inicio
@@ -437,7 +449,9 @@ Migración `prisma/migrations/20260721170200_maestro_admin_especificaciones/`. D
 
 ### Seed
 
-Catálogo de **13 parámetros + 14 bindings** (`prisma/seed.ts`), estructura derivada de los `schema_json` existentes. **Sin backfill de especificaciones** — los rangos por producto son dato de calidad y se cargan a demanda desde el módulo admin. **Actualización (ver ADR-016):** el catálogo creció a 15 parámetros y 18 bindings al agregar "Control Peso Tapas" — ver esa sección para el detalle de qué se sumó.
+Catálogo de **13 parámetros + 14 bindings** (`prisma/seed.ts`), estructura derivada de los `schema_json` existentes. **Sin backfill de especificaciones** — los rangos por producto son dato de calidad y se cargan a demanda desde el módulo admin. **Actualización (ver ADR-016):** el catálogo creció a 15 parámetros y 18 bindings al agregar "Control Peso Tapas" — ver esa sección para el detalle de qué se sumó. **Actualización (ADR-017):** hoy son **19 parámetros y 22 bindings**.
+
+**Aclaración de la regla 6 (`agregacion: derivado`), ADR-017:** "derivado" significa que el valor **no existe como clave de `data`** y lo calcula un módulo de `lib/` — no significa "se evalúa al cierre de jornada". Los `pct_rotura_*` son `derivado` y se comparan **en vivo** mientras el operario carga. Ver la invariante de `campoData` en `adr-017-encajado-envasado.md`.
 
 ### Verificación
 
@@ -635,7 +649,7 @@ Ver ADR-012. **Append-only** — nunca `update`/`delete`.
 
 ### Parametro (`parametros`) — ADR-015
 
-Catálogo **CERRADO** de parámetros especificables. Solo admin/seed agrega. **15 parámetros sembrados hoy** (13 desde ADR-015 + `peso_cobertura` y `temp_interna` agregados en ADR-016).
+Catálogo **CERRADO** de parámetros especificables. Solo admin/seed agrega. **19 parámetros sembrados hoy** (13 desde ADR-015 + `peso_cobertura` y `temp_interna` de ADR-016 + `pct_rotura_grupo1`, `pct_rotura_grupo2`, `pct_rotura_total` y `peso_paquete_opp` de ADR-017).
 
 | Campo | Tipo | Notas |
 |---|---|---|
@@ -701,12 +715,23 @@ Log **append-only** de cambios sobre el maestro y las especificaciones. Escrito 
 - Se agregó `trazabilidad_insumos`.
 - `fechado_envase` **queda en el enum por compatibilidad histórica**, pero el punto de control está desactivado (`activo: false` en seed): el control de fechado se hace en planilla física.
 - **No se agregó ningún valor nuevo para TAPAS (ver ADR-016):** "Control Peso Tapas" reutiliza `peso_bano` — el dispatch de componente distingue el modo de UI por la familia del producto activo (`productoActivo.familiaSlug`), no por `tipoFormulario`.
+- **Se agregaron `rotura_encajado` y `peso_paquete_opp` (ADR-017, 2026-08-06)**, vía migración aditiva `20260805120000_add_tipos_formulario_rotura_opp` (dos `ALTER TYPE ... ADD VALUE IF NOT EXISTS`). Acá sí hizo falta valor nuevo, a diferencia de TAPAS: `generico` no soporta arrays ni `filaProd`, y `peso_alfajor` tiene 12 mediciones hardcodeadas en ~8 lugares de `PesoMedicionesForm` más un submodo — forzar cualquiera de los dos era reincidir en la causa raíz del bug de ADR-016.
+- `fechado_envase` pasa de "desactivado" a **RETIRADO** (ADR-017): la verificación de fechado vive dentro de "Control Peso Alfajor + OPP". Si se reactivara, el mismo hecho de negocio podría vivir en dos schemas distintos y todo reporte de fechado saldría incompleto, con cada mitad consistente por separado.
 
 ### Punto de control "Trazabilidad Insumos" (Línea 3)
 
 - Un registro por **cambio de lote de insumo** (no por turno).
 - `data` JSONB: `{ insumo: tapas_sin_banar | tapas_banadas | bonobon | dulce_de_leche | bano_chocolate, lote_insumo, observaciones? }`. **`tapas_sin_banar` agregado en ADR-016** (2026-07-21) — la tapa cruda que entra al proceso de baño de TAPAS, distinta de `tapas_banadas` (la tapa ya bañada). En UI, `bano_chocolate` se muestra como "Cobertura de Chocolate" (relabel de ADR-016) y la lista visible se filtra por `productoActivo.familiaSlug` (solo de UI, sin enforcement server-side).
 - Propósito: ante un recall, cruzar el momento del cambio de lote con el correlativo de pallets del día para acotar los pallets afectados.
+
+### Puntos de control de encajado/envasado (Línea 3) — ADR-017
+
+Dos puntos de control agregados el 2026-08-06, digitalizando planillas de papel de la estación donde el alfajor pasa a producto terminado. **El detalle completo está en [`adr-017-encajado-envasado.md`](adr-017-encajado-envasado.md)** — incluida la tabla de semántica de `filaProd` por punto de control y la invariante de `campoData` para parámetros derivados, que son de lectura obligatoria antes de agregar cualquier punto de control nuevo que use esos dos mecanismos.
+
+- **"Control de Rotura en Encajado"** (`rotura_encajado`): un registro por (máquina encajadora, hora). Las 2 máquinas de una hora comparten `nroMuestra` y se distinguen por `filaProd` = 1|2. `data`: `{ maquina, unidades_muestreadas, golpeado_rotura_menor, golpeado_rotura_mayor, aplastado_rotura_leve, aplastado_rotura_intermedia, aplastado_rotura_mayor }`. Los 3 porcentajes son derivados y no se persisten; el denominador sí, siempre, para que los porcentajes históricos sean recomputables. Agregado **ponderado** (suma no-OK / suma unidades), nunca promedio de porcentajes. Una máquina no muestreada **no genera registro**.
+- **"Control Peso Alfajor + OPP"** (`peso_paquete_opp`): un registro por hora. `data`: `{ mediciones[10], fechado_no_conformes, fechado_tipo_falla?, fechado_observacion? }`. Es control de **proceso** sobre peso bruto del paquete envuelto, **no** verificación de contenido neto legal.
+- Ambos quedan **sin asociar a familia** a propósito: las familias reales las crea el import de Excel y el seed solo garantiza `alfajor_negro` y `tapas`, así que bindear a `alfajor_negro` esconde el control para otros alfajores, incluido el SKU copacker de Arcor.
+- **Sin especificaciones sembradas**: los 4 parámetros nuevos (`pct_rotura_grupo1/grupo2/total`, `peso_paquete_opp`) existen como estructura y las tolerancias se cargan desde `/maestro` cuando esté la ET vigente.
 
 ### Punto de control "Control Peso Tapas" (Línea 3) — ADR-016
 

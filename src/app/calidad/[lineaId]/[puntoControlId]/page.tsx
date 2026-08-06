@@ -6,6 +6,8 @@ import { TemperaturaForm, type TipoFormularioTemp } from "@/components/calidad/T
 import { DetectorMetalesForm } from "@/components/calidad/DetectorMetalesForm";
 import { ProduccionDiariaForm } from "@/components/calidad/ProduccionDiariaForm";
 import { TrazabilidadInsumosForm } from "@/components/calidad/TrazabilidadInsumosForm";
+import { RoturaEncajadoForm } from "@/components/calidad/RoturaEncajadoForm";
+import { PesoOppForm } from "@/components/calidad/PesoOppForm";
 import { RegistroGenericoForm } from "@/components/calidad/RegistroGenericoForm";
 import { getRelacionPuntoLinea, getProductoActivoDeLinea } from "@/db/calidad.repository";
 import { getEspecificacionesCaptura } from "@/db/maestro.repository";
@@ -83,6 +85,7 @@ const DEMO_PRODUCTO_ACTIVO: ProductoActivoLinea = {
   vidaUtilMeses: 9,
   nomenclaturaLote: "L{yyyyMMdd}-{correlativo}",
   cajasPorPallet: 48,
+  unidadesPorCaja: 21,
   activadoPorNombre: "Demo",
   activadoEn: new Date(0).toISOString(),
 };
@@ -123,6 +126,7 @@ export default async function RegistroPuntoControlPage({
           vidaUtilMeses: estado.loteActivo.producto.vidaUtilMeses,
           nomenclaturaLote: estado.loteActivo.producto.nomenclaturaLote,
           cajasPorPallet: estado.loteActivo.producto.cajasPorPallet,
+          unidadesPorCaja: dec(estado.loteActivo.producto.unidadesPorCaja),
           activadoPorNombre: estado.activadoPor.nombre,
           activadoEn: estado.activadoEn.toISOString(),
         };
@@ -226,6 +230,18 @@ export default async function RegistroPuntoControlPage({
           />
         ) : pc.tipoFormulario === "trazabilidad_insumos" ? (
           <TrazabilidadInsumosForm
+            puntoControlId={pc.id}
+            lineaProductivaId={lineaId}
+            productoActivo={productoActivo}
+          />
+        ) : pc.tipoFormulario === "rotura_encajado" ? (
+          <RoturaEncajadoForm
+            puntoControlId={pc.id}
+            lineaProductivaId={lineaId}
+            productoActivo={productoActivo}
+          />
+        ) : pc.tipoFormulario === "peso_paquete_opp" ? (
+          <PesoOppForm
             puntoControlId={pc.id}
             lineaProductivaId={lineaId}
             productoActivo={productoActivo}

@@ -10,7 +10,7 @@
  *   1. Lee todos los `puntos_control` activos de la base de datos.
  *   2. Por cada uno, parsea su `schema_json` (JSON Schema draft-07).
  *   3. Genera DDL de una vista SQL que "aplana" los campos del JSONB a columnas reales.
- *   4. Ejecuta los CREATE OR REPLACE VIEW contra la base de datos.
+ *   4. Ejecuta los DROP + CREATE VIEW contra la base de datos, en una transaccion.
  *   5. Genera también una vista de formato largo cruzando todos los puntos de control.
  *
  * CUÁNDO EJECUTAR:
@@ -71,6 +71,35 @@ function toColumnName(campo: string): string {
     .replace(/[^a-z0-9_]/g, "_");
 }
 
+// -----------------------------------------------------------------------------
+// Escapado para el DDL — este script usa $executeRawUnsafe, que además acepta
+// múltiples sentencias, así que todo lo que venga de la DB tiene que escaparse.
+//
+// Hoy los `schema_json` y los nombres de punto de control se cargan únicamente
+// desde prisma/seed.ts, así que no hay entrada de usuario acá. Pero este script
+// corre con DIRECT_URL, o sea el rol dueño del schema: una inyección por esta vía
+// no sería "leer datos de más", sería DDL arbitrario con permisos de owner. El día
+// que exista una UI que edite schema_json (o un import de Excel que toque puntos
+// de control), esto pasa de latente a explotable — el escapado va ahora.
+// -----------------------------------------------------------------------------
+
+// Nombres de propiedad aceptables en un schema_json de este repo. Cualquier cosa
+// fuera de esto no es un caso de negocio válido: se corta ruidosamente.
+const IDENT_OK = /^[a-z][a-z0-9_]{0,62}$/;
+
+function sqlLiteral(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
+function sqlIdent(s: string): string {
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+// Un \n en un nombre saca el resto de la línea del comentario `--` y lo vuelve SQL.
+function comentarioSeguro(s: string): string {
+  return s.replace(/[\r\n]+/g, " ");
+}
+
 // Genera el DDL de una vista "ancha" para un punto de control específico
 function generateWideDDL(puntoControl: {
   id: string;
@@ -84,7 +113,13 @@ function generateWideDDL(puntoControl: {
   const properties = schema.properties ?? {};
   const viewName = toViewName(puntoControl.nombre);
 
-  // Columnas estructurales fijas (siempre presentes en todas las vistas)
+  // Columnas estructurales fijas (siempre presentes en todas las vistas).
+  //
+  // La línea de negocio (marca_propia | copacker_arcor | fason_terceros) vive en
+  // `marcas`, no en `productos`. Antes acá decía `p.linea` y `p.tipo_cliente`,
+  // columnas que nunca existieron en el schema: el DDL de TODAS las vistas
+  // fallaba, así que no había ninguna vista generada (hallazgo de
+  // arquitecto-industrial, 2026-08-05).
   const columnasFijas = `
     rc.id                                          AS registro_id,
     rc.fecha                                       AS fecha,
@@ -92,8 +127,9 @@ function generateWideDDL(puntoControl: {
     l.numero_lote                                  AS numero_lote,
     p.sku                                          AS producto_sku,
     p.nombre                                       AS producto_nombre,
-    p.linea                                        AS linea_producto,
-    p.tipo_cliente                                 AS tipo_cliente,
+    f.nombre                                       AS familia,
+    m.nombre                                       AS marca,
+    m.linea_negocio                                AS linea_negocio,
     lp.nombre                                      AS linea_productiva,
     u.nombre                                       AS responsable,
     rc.nro_muestra                                 AS nro_muestra,
@@ -104,19 +140,39 @@ function generateWideDDL(puntoControl: {
   // Columnas dinámicas del JSONB — una por campo del schema
   const columnasData = Object.entries(properties)
     .map(([campo, def]) => {
+      // Se valida el nombre crudo ANTES de interpolarlo. toColumnName sanea el
+      // alias, pero el literal del `data ->>` lleva el nombre tal cual: una
+      // propiedad como `x')::text AS a, (SELECT ...) AS b, (rc.data->>'y` cerraba
+      // el literal y agregaba SQL arbitrario.
+      if (!IDENT_OK.test(campo)) {
+        throw new Error(
+          `Punto de control "${puntoControl.nombre}": la propiedad ${JSON.stringify(
+            campo
+          )} de su schema_json no es un identificador válido (se espera ${IDENT_OK}). No se genera la vista.`
+        );
+      }
       const colName = toColumnName(campo);
       const pgType = jsonTypeToPostgres(def);
       // Extrae el campo del JSONB y lo castea al tipo correcto
-      return `    (rc.data ->> '${campo}')::${pgType}          AS ${colName}`;
+      return `    (rc.data ->> ${sqlLiteral(campo)})::${pgType}          AS ${sqlIdent(colName)}`;
     })
     .join(",\n");
 
   return `
--- Vista analítica para: ${puntoControl.nombre}
+-- Vista analítica para: ${comentarioSeguro(puntoControl.nombre)}
 -- Generada automáticamente por scripts/generate-views.ts
 -- Leer: docs/architecture.md para entender el patrón de generación.
 -- NO MODIFICAR MANUALMENTE — regenerar con: npm run db:views
-CREATE OR REPLACE VIEW ${viewName} AS
+--
+-- DROP + CREATE en vez de CREATE OR REPLACE: Postgres no permite quitar ni
+-- reordenar columnas con REPLACE, así que agregar una propiedad en el medio de un
+-- schema_json fallaba con "cannot change name of view column" y dejaba la vista
+-- vieja en pie mientras Power BI la leía como si estuviera al día.
+--
+-- Sin CASCADE a propósito: si alguien montó una vista o matview encima de esta,
+-- CASCADE la borraría sin un solo mensaje. Que falle y se decida a mano.
+DROP VIEW IF EXISTS ${sqlIdent(viewName)};
+CREATE VIEW ${sqlIdent(viewName)} AS
 SELECT
 ${columnasFijas},
 ${columnasData}
@@ -124,9 +180,14 @@ FROM registros_calidad rc
 JOIN puntos_control    pc ON rc.punto_control_id    = pc.id
 JOIN lotes             l  ON rc.lote_id             = l.id
 JOIN productos         p  ON l.producto_id          = p.id
+JOIN familias          f  ON p.familia_id          = f.id
+JOIN marcas            m  ON p.marca_id            = m.id
 JOIN lineas_productivas lp ON rc.linea_productiva_id = lp.id
 JOIN usuarios          u  ON rc.responsable_id      = u.id
-WHERE pc.id = '${puntoControl.id}';
+-- deleted_at IS NULL: registros_calidad es soft-delete por HACCP (nunca borrado
+-- físico). Sin este filtro, una muestra anulada por error de carga entra al
+-- reporte que se le muestra al cliente como si fuera un dato real.
+WHERE pc.id = ${sqlLiteral(puntoControl.id)}::uuid AND rc.deleted_at IS NULL;
 
 -- Índice de soporte para consultas por fecha desde Power BI
 -- (Postgres crea índices en tablas, no vistas; este comentario es recordatorio)
@@ -140,7 +201,8 @@ function generateLongFormatDDL(): string {
 -- Vista de formato largo: un registro por campo de cualquier punto de control
 -- Útil para análisis cruzados en Power BI (comparar métricas entre puntos de control distintos).
 -- Limitación: todos los valores son TEXT — hacer los castings en Power Query según necesidad.
-CREATE OR REPLACE VIEW vw_calidad_formato_largo AS
+DROP VIEW IF EXISTS vw_calidad_formato_largo;
+CREATE VIEW vw_calidad_formato_largo AS
 SELECT
     rc.id                                    AS registro_id,
     pc.nombre                                AS punto_control,
@@ -149,7 +211,7 @@ SELECT
     l.numero_lote                            AS numero_lote,
     p.sku                                    AS producto_sku,
     p.nombre                                 AS producto_nombre,
-    p.linea                                  AS linea_producto,
+    m.linea_negocio                          AS linea_negocio,
     lp.nombre                                AS linea_productiva,
     u.nombre                                 AS responsable,
     rc.nro_muestra                           AS nro_muestra,
@@ -160,10 +222,13 @@ FROM registros_calidad rc
 JOIN puntos_control     pc ON rc.punto_control_id     = pc.id
 JOIN lotes              l  ON rc.lote_id              = l.id
 JOIN productos          p  ON l.producto_id           = p.id
+JOIN marcas             m  ON p.marca_id             = m.id
 JOIN lineas_productivas lp ON rc.linea_productiva_id  = lp.id
 JOIN usuarios           u  ON rc.responsable_id       = u.id,
 -- jsonb_each_text aplana el JSONB en filas (campo, valor)
-LATERAL jsonb_each_text(rc.data) AS kv(key, value);
+LATERAL jsonb_each_text(rc.data) AS kv(key, value)
+-- Soft-delete HACCP: un registro anulado no debe salir al reporte.
+WHERE rc.deleted_at IS NULL;
 `.trim();
 }
 
@@ -172,7 +237,8 @@ function generateResumenUltimaMuestraDDL(): string {
   return `
 -- Vista resumen: último registro por lote + punto de control
 -- Útil para dashboards de estado actual en Power BI.
-CREATE OR REPLACE VIEW vw_calidad_ultima_muestra AS
+DROP VIEW IF EXISTS vw_calidad_ultima_muestra;
+CREATE VIEW vw_calidad_ultima_muestra AS
 SELECT DISTINCT ON (rc.lote_id, rc.punto_control_id)
     rc.id                                    AS registro_id,
     pc.nombre                                AS punto_control,
@@ -191,6 +257,9 @@ JOIN lotes              l  ON rc.lote_id              = l.id
 JOIN productos          p  ON l.producto_id           = p.id
 JOIN lineas_productivas lp ON rc.linea_productiva_id  = lp.id
 JOIN usuarios           u  ON rc.responsable_id       = u.id
+-- Soft-delete HACCP. Acá es doblemente importante: sin el filtro, el DISTINCT ON
+-- puede elegir justo el registro anulado como "última muestra" del lote.
+WHERE rc.deleted_at IS NULL
 ORDER BY rc.lote_id, rc.punto_control_id, rc.fecha DESC, rc.hora DESC;
 `.trim();
 }
@@ -208,6 +277,30 @@ async function main() {
     return;
   }
 
+  // toViewName no es inyectivo: "Control Peso Alfajor + OPP" y "Control Peso
+  // Alfajor OPP" colapsan al mismo nombre. Sin este chequeo, el segundo punto de
+  // control dropea y reemplaza la vista del primero sin ningún error, y Power BI
+  // sigue leyendo el mismo nombre mostrando los datos del PC equivocado.
+  const porNombreDeVista = new Map<string, string>();
+  for (const pc of puntosControl) {
+    const viewName = toViewName(pc.nombre);
+    const previo = porNombreDeVista.get(viewName);
+    if (previo) {
+      throw new Error(
+        `Colisión de nombre de vista "${viewName}": los puntos de control "${previo}" y "${pc.nombre}" generan el mismo nombre. Renombrá uno de los dos.`
+      );
+    }
+    porNombreDeVista.set(viewName, pc.nombre);
+  }
+
+  // Las fallas se cuentan y hacen fallar el proceso al final (ver el throw). No
+  // alcanza con logearlas: durante meses TODAS las vistas fallaban (referenciaban
+  // p.linea / p.tipo_cliente, columnas inexistentes), el script decía "generación
+  // completada" y salía con código 0, así que nadie se enteró de que Power BI no
+  // tenía ninguna vista. Un conjunto parcial de vistas no es confiable para
+  // reportar: mejor romper ruidosamente.
+  let fallas = 0;
+
   // Generar y ejecutar vista por cada punto de control
   for (const pc of puntosControl) {
     const ddl = generateWideDDL(pc);
@@ -219,6 +312,7 @@ async function main() {
       await prisma.$executeRawUnsafe(ddl);
       console.log(`   ✅ ${viewName} creada/actualizada\n`);
     } catch (err) {
+      fallas++;
       console.error(`   ❌ Error al crear ${viewName}:`, err);
     }
   }
@@ -229,6 +323,7 @@ async function main() {
     await prisma.$executeRawUnsafe(generateLongFormatDDL());
     console.log("   ✅ vw_calidad_formato_largo creada/actualizada\n");
   } catch (err) {
+    fallas++;
     console.error("   ❌ Error:", err);
   }
 
@@ -238,7 +333,14 @@ async function main() {
     await prisma.$executeRawUnsafe(generateResumenUltimaMuestraDDL());
     console.log("   ✅ vw_calidad_ultima_muestra creada/actualizada\n");
   } catch (err) {
+    fallas++;
     console.error("   ❌ Error:", err);
+  }
+
+  if (fallas > 0) {
+    throw new Error(
+      `${fallas} vista(s) fallaron. Un conjunto parcial de vistas no es confiable para Power BI: revisá los errores de arriba y volvé a correr.`
+    );
   }
 
   console.log("🎉 Generación de vistas completada");
