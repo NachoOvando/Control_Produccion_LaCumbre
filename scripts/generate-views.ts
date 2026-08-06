@@ -25,9 +25,27 @@
  *   Ver: docs/architecture.md#conexion-power-bi
  */
 
-import { PrismaClient } from "@prisma/client";
+import { config as dotenvConfig } from "dotenv";
+// tsx no carga .env.local automáticamente (a diferencia de Next.js en runtime, o
+// del CLI de Prisma vía prisma.config.ts) — sin esto, DIRECT_URL/DATABASE_URL
+// llegan undefined y el error de conexión no dice por qué.
+dotenvConfig({ path: ".env.local" });
+dotenvConfig({ path: ".env" });
 
-const prisma = new PrismaClient();
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+
+// El schema no declara `url` en el datasource (patrón de adaptador, ver
+// src/lib/prisma.ts) — `new PrismaClient()` sin adapter no tiene con qué
+// conectarse. Se usa DIRECT_URL, no DATABASE_URL: este script ejecuta DDL
+// (DROP/CREATE VIEW), y el pooler de transacciones (PgBouncer) es el mismo que
+// prisma.config.ts evita para migraciones por la razón documentada en ADR-014.
+const connectionString = process.env.DIRECT_URL;
+if (!connectionString) {
+  throw new Error("DIRECT_URL no está definida. Ver prisma.config.ts y ADR-014 en docs/architecture.md.");
+}
+const adapter = new PrismaPg({ connectionString });
+const prisma = new PrismaClient({ adapter });
 
 // Mapeo de tipos JSON Schema → tipos PostgreSQL
 function jsonTypeToPostgres(jsonSchema: Record<string, unknown>): string {
