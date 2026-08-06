@@ -126,6 +126,28 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
 
   const specPeso = specDeCampo(productoActivo.especificaciones, "mediciones");
 
+  // ── Agregado del lote (ponderado) ────────────────────────────────────────
+  //
+  // Mismo criterio que RoturaEncajadoForm: filtrado por lote activo (no por
+  // fecha) porque useRegistrosDelDia trae todo (línea, punto de control, hoy),
+  // y un cambio de producto a mitad de jornada mezclaría el promedio de dos
+  // productos distintos bajo la spec del que está activo ahora.
+  const pesosGuardados: number[] = registros
+    .filter((r) => r.lote?.numeroLote === productoActivo.numeroLote)
+    .flatMap((r) => (Array.isArray(r.data.mediciones) ? (r.data.mediciones as unknown[]) : []))
+    .map((v) => (typeof v === "number" ? v : NaN));
+
+  const pesosEnPantalla: string[] = muestras.flatMap((m) => m.mediciones);
+
+  const agregado = estadisticasMediciones([...pesosGuardados, ...pesosEnPantalla]);
+  const cantidadMuestrasLote =
+    registros.filter((r) => r.lote?.numeroLote === productoActivo.numeroLote).length + muestras.length;
+
+  // Igual que Rotura: si no se pudo traer lo ya cargado hoy, el agregado solo
+  // tiene lo de pantalla — no es "el lote". Mostrarlo igual sería señalizar
+  // conformidad sobre un denominador incompleto.
+  const agregadoIncompleto = cargando || errorRegistros != null;
+
   // ── Mutadores ─────────────────────────────────────────────────────────────
 
   const patchMuestra = (muestraId: number, patch: Partial<MuestraForm>) =>
@@ -324,6 +346,44 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
         </p>
       </div>
 
+      {/* Resumen ponderado del lote */}
+      <div className="bg-white rounded-2xl p-4 border border-gray-100">
+        <div className="flex items-baseline justify-between mb-2">
+          <h2 className="text-xs font-bold text-gray-600 uppercase tracking-wider">Peso promedio del lote</h2>
+          {!agregadoIncompleto && (
+            <span className="text-xs text-gray-600">
+              {cantidadMuestrasLote} {cantidadMuestrasLote === 1 ? "muestra" : "muestras"}
+              {agregado ? ` · ${agregado.n} paquetes` : ""}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <p className="text-2xl font-bold font-mono text-gray-900">
+            {agregadoIncompleto || !agregado ? "—" : `${agregado.promedio.toFixed(1)} g`}
+          </p>
+          {/* Sin indicador de spec si el agregado está incompleto o vacío: sería
+              señalizar conformidad sobre un denominador parcial. */}
+          {specPeso && agregado && !agregadoIncompleto && (
+            <IndicadorSpec valor={agregado.promedio} spec={specPeso} conTexto />
+          )}
+        </div>
+        {specPeso && <RangoObjetivo spec={specPeso} />}
+        {agregadoIncompleto ? (
+          <p className="text-xs text-gray-600 mt-2">
+            {cargando
+              ? "Cargando los registros de hoy..."
+              : "No se pudo traer lo ya cargado hoy — el promedio del lote está incompleto. Podés seguir cargando igual."}
+          </p>
+        ) : (
+          !specPeso && (
+            <p className="text-xs text-gray-600 mt-2">
+              Sin tolerancia cargada para este producto: el promedio se registra igual, pero no se compara
+              contra nada. Se define en Maestro → Especificaciones.
+            </p>
+          )
+        )}
+      </div>
+
       {muestras.map((muestra, idx) => {
         const stats = estadisticasMediciones(muestra.mediciones);
         const nc = noConformesNum(muestra);
@@ -361,6 +421,25 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
                 </p>
                 {specPeso && <RangoObjetivo spec={specPeso} />}
               </div>
+
+              {/* Promedio de ESTA muestra, ANTES de la grilla de carga: el operario
+                  tiene que ver hacia dónde va el promedio mientras carga, no
+                  recién al final cuando ya no puede reaccionar sobre esa muestra. */}
+              {stats && (
+                <div className="mb-2 flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2">
+                  <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                    n={stats.n} · mín {stats.min.toFixed(1)} · máx {stats.max.toFixed(1)} · σ{" "}
+                    {stats.desvio.toFixed(2)}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-sm font-bold font-mono text-gray-900">
+                      Prom. {stats.promedio.toFixed(1)} g
+                    </span>
+                    {specPeso && <IndicadorSpec valor={stats.promedio} spec={specPeso} conTexto />}
+                  </span>
+                </div>
+              )}
+
               <div className="grid grid-cols-5 gap-2">
                 {muestra.mediciones.map((valor, celda) => {
                   const activo = foco?.muestraId === muestra.id && foco.celda === celda;
@@ -398,21 +477,6 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
                   );
                 })}
               </div>
-
-              {stats && (
-                <div className="mt-2 flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2">
-                  <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
-                    n={stats.n} · mín {stats.min.toFixed(1)} · máx {stats.max.toFixed(1)} · σ{" "}
-                    {stats.desvio.toFixed(2)}
-                  </span>
-                  <span className="flex items-center gap-1.5">
-                    <span className="text-sm font-bold font-mono text-gray-900">
-                      Prom. {stats.promedio.toFixed(1)} g
-                    </span>
-                    {specPeso && <IndicadorSpec valor={stats.promedio} spec={specPeso} conTexto />}
-                  </span>
-                </div>
-              )}
             </div>
 
             {/* Fechado */}
