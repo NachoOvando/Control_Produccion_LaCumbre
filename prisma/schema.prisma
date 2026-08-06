@@ -421,6 +421,8 @@ enum TipoFormulario {
   produccion_diaria
   trazabilidad_insumos
   generico
+  rotura_encajado
+  peso_paquete_opp
 }
 
 model PuntoControl {

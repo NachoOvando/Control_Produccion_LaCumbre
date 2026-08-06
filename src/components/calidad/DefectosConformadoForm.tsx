@@ -4,6 +4,7 @@ import { hoyPlanta, horaPlanta } from "@/lib/calidad/fecha-planta";
 import { useState, useCallback, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
+import { SelectorMuestras } from "@/components/calidad/SelectorMuestras";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
@@ -258,52 +259,6 @@ function FilaCard({
   );
 }
 
-// ------- Tab de muestra ------- //
-
-function MuestraTab({
-  muestra,
-  activa,
-  onClick,
-  onDelete,
-  puedeEliminar,
-}: {
-  muestra: MuestraData;
-  activa: boolean;
-  onClick: () => void;
-  onDelete: () => void;
-  puedeEliminar: boolean;
-}) {
-  const tieneDefectos = muestraTieneDefectos(muestra);
-
-  return (
-    <div className="relative flex-shrink-0">
-      <button
-        type="button"
-        onClick={onClick}
-        className={`
-          px-4 py-2 rounded-xl text-sm font-semibold transition-all flex items-center gap-1.5
-          ${activa
-            ? "bg-white text-[#E1000F] shadow border border-gray-200"
-            : "text-gray-600 hover:bg-white/60"
-          }
-        `}
-      >
-        M{muestra.id}
-        {tieneDefectos && <span className="text-amber-500 text-base leading-none">⚠</span>}
-      </button>
-      {puedeEliminar && activa && (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600"
-        >
-          ×
-        </button>
-      )}
-    </div>
-  );
-}
-
 // ------- Formulario principal ------- //
 
 export function DefectosConformadoForm({ puntoControlId, lineaProductivaId, productoActivo }: Props) {
@@ -360,6 +315,7 @@ export function DefectosConformadoForm({ puntoControlId, lineaProductivaId, prod
 
   const eliminarMuestraActiva = () => {
     if (muestras.length <= 1) return;
+    if (!window.confirm(`Vas a eliminar la muestra de las ${muestraActiva.hora} con lo que tenga cargado. ¿Confirmás?`)) return;
     const nuevas = muestras.filter((m) => m.id !== muestraActivaId);
     setMuestras(nuevas);
     setMuestraActivaId(nuevas[Math.max(0, muestraActivaIdx - 1)].id);
@@ -423,29 +379,18 @@ export function DefectosConformadoForm({ puntoControlId, lineaProductivaId, prod
       {/* Producto en producción */}
       <ProductoActivoBanner productoActivo={productoActivo} lineaId={lineaProductivaId} />
 
-      {/* Tabs de muestras + botón agregar */}
-      <div className="bg-[#f0f0f0] rounded-xl p-3 flex items-center gap-2 overflow-x-auto">
-        {muestras.map((m) => (
-          <MuestraTab
-            key={m.id}
-            muestra={m}
-            activa={m.id === muestraActivaId}
-            onClick={() => setMuestraActivaId(m.id)}
-            onDelete={eliminarMuestraActiva}
-            puedeEliminar={muestras.length > 1}
-          />
-        ))}
-        <button
-          type="button"
-          onClick={agregarMuestra}
-          className="flex-shrink-0 px-3 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-white/60 flex items-center gap-1 transition-all"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Muestra
-        </button>
-      </div>
+      {/* Selector de muestras */}
+      <SelectorMuestras
+        muestras={muestras}
+        muestraActivaId={muestraActivaId}
+        onSeleccionar={setMuestraActivaId}
+        onAgregar={agregarMuestra}
+        onEliminar={eliminarMuestraActiva}
+        puedeEliminar={muestras.length > 1}
+        renderInsignia={(m) =>
+          muestraTieneDefectos(m) ? <span className="text-amber-500 text-base leading-none">⚠</span> : null
+        }
+      />
 
       {/* Datos de la muestra activa */}
       <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3">

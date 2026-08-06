@@ -83,6 +83,9 @@ export type ProductoActivoLinea = {
   vidaUtilMeses: number | null;
   nomenclaturaLote: string | null;
   cajasPorPallet: number | null;
+  // Default del denominador de RoturaEncajadoForm (unidades por caja de la
+  // muestra). Editable en el form: la caja real a veces está incompleta.
+  unidadesPorCaja: number | null;
   activadoPorNombre: string;
   activadoEn: string; // ISO
   // Specs vigentes del producto para el punto de control en contexto (solo se

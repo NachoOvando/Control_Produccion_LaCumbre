@@ -96,6 +96,62 @@ describe("createRegistrosBatchDB — asignación atómica de nroMuestra (C5)", (
     expect(calls[1][0].data.filaProd).toBe(2);
   });
 
+  // Control de Rotura en Encajado: 2 horas × 2 máquinas encajadoras. Las 2
+  // máquinas de una misma hora comparten nroMuestra y difieren en filaProd (1|2),
+  // así que cada HORA debe consumir un solo correlativo — si cada máquina se
+  // llevara el suyo, se perdería el apareo por hora.
+  it("2 horas × 2 máquinas de rotura consumen 2 correlativos, uno por hora (RoturaEncajadoForm)", async () => {
+    mockSecuenciaDevuelve([11, 12]);
+    const rotura = (maquina: number) => ({
+      maquina,
+      unidades_muestreadas: 21,
+      golpeado_rotura_menor: 1,
+      golpeado_rotura_mayor: 0,
+      aplastado_rotura_leve: 0,
+      aplastado_rotura_intermedia: 0,
+      aplastado_rotura_mayor: 0,
+    });
+
+    await createRegistrosBatchDB([
+      baseInput({ nroMuestra: 1, filaProd: 1, hora: "10:00:00", data: rotura(1) }),
+      baseInput({ nroMuestra: 1, filaProd: 2, hora: "10:00:00", data: rotura(2) }),
+      baseInput({ nroMuestra: 2, filaProd: 1, hora: "11:00:00", data: rotura(1) }),
+      baseInput({ nroMuestra: 2, filaProd: 2, hora: "11:00:00", data: rotura(2) }),
+    ]);
+
+    // Dos incrementos, no cuatro
+    expect(txMock.$queryRaw).toHaveBeenCalledTimes(2);
+    const calls = txMock.registroCalidad.create.mock.calls;
+    expect(calls).toHaveLength(4);
+    // Primera hora: las 2 máquinas comparten el correlativo 11
+    expect(calls[0][0].data.nroMuestra).toBe(11);
+    expect(calls[1][0].data.nroMuestra).toBe(11);
+    expect(calls[0][0].data.filaProd).toBe(1);
+    expect(calls[1][0].data.filaProd).toBe(2);
+    // Segunda hora: correlativo 12
+    expect(calls[2][0].data.nroMuestra).toBe(12);
+    expect(calls[3][0].data.nroMuestra).toBe(12);
+    // Sin pallet_numero en el data, dataConCorrelativoSincronizado no toca nada
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((calls[0][0].data.data as any).unidades_muestreadas).toBe(21);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((calls[0][0].data.data as any).pallet_numero).toBeUndefined();
+  });
+
+  // Una máquina parada no genera registro: la hora manda una sola fila. Lo que
+  // NO debe pasar es que se invente una fila con 0 defectos y un denominador
+  // cualquiera, porque diluiría el porcentaje del día.
+  it("una hora con una sola máquina muestreada genera un único registro", async () => {
+    mockSecuenciaDevuelve([13]);
+    await createRegistrosBatchDB([
+      baseInput({ nroMuestra: 1, filaProd: 1, data: { maquina: 1, unidades_muestreadas: 21 } }),
+    ]);
+
+    expect(txMock.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(txMock.registroCalidad.create.mock.calls).toHaveLength(1);
+    expect(txMock.registroCalidad.create.mock.calls[0][0].data.filaProd).toBe(1);
+  });
+
   it("un segundo batch del mismo día continúa la secuencia en vez de reiniciar en 1 (B1)", async () => {
     // Primer guardado del día: la secuencia ya venía en 0, este batch la deja en 3.
     mockSecuenciaDevuelve([3]);

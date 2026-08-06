@@ -14,10 +14,31 @@ type Props = {
   // de captura corre antes del onClick del propio botón que abrió el numpad,
   // así que tocar otra celda cierra y reabre con el campo nuevo sin problema.
   onCerrar?: () => void;
+  // Al abrirse sobre una celda que YA tiene valor, el primer dígito reemplaza en
+  // vez de appendear. Sin esto, corregir una celda cargada con 38.5 tipeando 39
+  // deja 38.53: un valor plausible, que pasa la validación y ensucia el promedio
+  // sin que nadie lo note. Opt-in para no cambiar el comportamiento de los
+  // formularios que ya usan el numpad.
+  //
+  // IMPORTANTE: el flag se evalúa al MONTAR. Si el numpad queda montado mientras
+  // el foco pasa de una celda a otra, hay que pasarle un `key` que identifique la
+  // celda para forzar el remonte — si no, el flag queda pegado al valor de la
+  // primera celda. Ver RoturaEncajadoForm/PesoOppForm.
+  limpiarAlPrimerDigito?: boolean;
 };
 
-export function NumpadIndustrial({ valor, onCambio, onConfirmar, label, onCerrar }: Props) {
+export function NumpadIndustrial({
+  valor,
+  onCambio,
+  onConfirmar,
+  label,
+  onCerrar,
+  limpiarAlPrimerDigito = false,
+}: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
+  // Se arma en el primer render de cada apertura: si el numpad abrió con un valor
+  // ya cargado, la próxima tecla numérica lo reemplaza.
+  const reemplazar = useRef(limpiarAlPrimerDigito && valor !== "");
 
   useEffect(() => {
     if (!onCerrar) return;
@@ -32,16 +53,21 @@ export function NumpadIndustrial({ valor, onCambio, onConfirmar, label, onCerrar
 
   const presionar = (tecla: string) => {
     if (tecla === "⌫") {
+      reemplazar.current = false;
       onCambio(valor.slice(0, -1));
       return;
     }
     if (tecla === "C") {
+      reemplazar.current = false;
       onCambio("");
       return;
     }
-    if (tecla === "." && valor.includes(".")) return;
-    if (valor.replace(".", "").length >= 5) return;
-    onCambio(valor + tecla);
+    // Primera tecla sobre una celda que ya tenía valor: arranca de cero.
+    const base = reemplazar.current ? "" : valor;
+    reemplazar.current = false;
+    if (tecla === "." && base.includes(".")) return;
+    if (base.replace(".", "").length >= 5) return;
+    onCambio(base + tecla);
   };
 
   const filas = [

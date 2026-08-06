@@ -44,6 +44,11 @@ function toProductoActivoLinea(estado: NonNullable<Awaited<ReturnType<typeof get
     vidaUtilMeses: estado.loteActivo.producto.vidaUtilMeses,
     nomenclaturaLote: estado.loteActivo.producto.nomenclaturaLote,
     cajasPorPallet: estado.loteActivo.producto.cajasPorPallet,
+    // Decimal? en Prisma → number | null en el contrato plano.
+    unidadesPorCaja:
+      estado.loteActivo.producto.unidadesPorCaja == null
+        ? null
+        : Number(estado.loteActivo.producto.unidadesPorCaja.toString()),
     activadoPorNombre: estado.activadoPor.nombre,
     activadoEn: estado.activadoEn.toISOString(),
   };

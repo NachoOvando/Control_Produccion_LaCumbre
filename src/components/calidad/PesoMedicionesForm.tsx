@@ -7,6 +7,7 @@ import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { RegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
+import { SelectorMuestras } from "@/components/calidad/SelectorMuestras";
 import { evaluarValor } from "@/lib/calidad/especificaciones";
 import { calcularCoberturaPorObservacion } from "@/lib/calidad/peso-cobertura";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
@@ -264,6 +265,7 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
 
   const eliminarMuestraActiva = () => {
     if (muestras.length <= 1) return;
+    if (!window.confirm(`Vas a eliminar la muestra de las ${muestraActiva.hora} con lo que tenga cargado. ¿Confirmás?`)) return;
     const nuevas = muestras.filter((m) => m.id !== muestraActivaId);
     setMuestras(nuevas);
     setMuestraActivaId(nuevas[Math.max(0, muestraActivaIdx - 1)].id);
@@ -358,51 +360,19 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
         <ProductoActivoBanner productoActivo={productoActivo} lineaId={lineaProductivaId} />
       </div>
 
-      {/* Tabs de muestras */}
-      <div className="bg-[#f0f0f0] rounded-xl p-3 flex items-center gap-2 overflow-x-auto" onClick={(e) => e.stopPropagation()}>
-        {muestras.map((m) => {
+      {/* Selector de muestras */}
+      <SelectorMuestras
+        muestras={muestras}
+        muestraActivaId={muestraActivaId}
+        onSeleccionar={(id) => { setMuestraActivaId(id); setCampoActivo(null); }}
+        onAgregar={agregarMuestra}
+        onEliminar={eliminarMuestraActiva}
+        puedeEliminar={muestras.length > 1}
+        renderInsignia={(m) => {
           const completadas = m.mediciones.filter((v) => v !== "").length;
-          return (
-            <div key={m.id} className="relative flex-shrink-0">
-              <button
-                type="button"
-                onClick={() => { setMuestraActivaId(m.id); setCampoActivo(null); }}
-                className={`
-                  px-4 py-2 rounded-xl text-sm font-semibold transition-all flex items-center gap-1.5
-                  ${m.id === muestraActivaId
-                    ? "bg-white text-[#E1000F] shadow border border-gray-200"
-                    : "text-gray-600 hover:bg-white/60"
-                  }
-                `}
-              >
-                M{m.id}
-                {completadas === 12 && (
-                  <span className="text-green-500 text-xs">✓</span>
-                )}
-              </button>
-              {muestras.length > 1 && m.id === muestraActivaId && (
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); eliminarMuestraActiva(); }}
-                  className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600"
-                >
-                  ×
-                </button>
-              )}
-            </div>
-          );
-        })}
-        <button
-          type="button"
-          onClick={agregarMuestra}
-          className="flex-shrink-0 px-3 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-white/60 flex items-center gap-1 transition-all"
-        >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Muestra
-        </button>
-      </div>
+          return completadas === 12 ? <span className="text-green-500 text-xs">✓</span> : null;
+        }}
+      />
 
       {/* Datos de la muestra: hora + tipo */}
       <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3" onClick={(e) => e.stopPropagation()}>
@@ -901,6 +871,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
 
   const eliminarMuestraActiva = () => {
     if (muestras.length <= 1) return;
+    if (!window.confirm(`Vas a eliminar la muestra de las ${muestraActiva.hora} con lo que tenga cargado. ¿Confirmás?`)) return;
     const nuevas = muestras.filter((m) => m.id !== muestraActivaId);
     setMuestras(nuevas);
     setMuestraActivaId(nuevas[Math.max(0, muestraActivaIdx - 1)].id);
@@ -983,29 +954,19 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
         <ProductoActivoBanner productoActivo={productoActivo} lineaId={lineaProductivaId} />
       </div>
 
-      {/* Tabs de muestras */}
-      <div className="bg-[#f0f0f0] rounded-xl p-3 flex items-center gap-2 overflow-x-auto" onClick={(e) => e.stopPropagation()}>
-        {muestras.map((m) => {
+      {/* Selector de muestras */}
+      <SelectorMuestras
+        muestras={muestras}
+        muestraActivaId={muestraActivaId}
+        onSeleccionar={(id) => { setMuestraActivaId(id); setCampoActivo(null); }}
+        onAgregar={agregarMuestra}
+        onEliminar={eliminarMuestraActiva}
+        puedeEliminar={muestras.length > 1}
+        renderInsignia={(m) => {
           const completas = FILAS_TAPA.reduce((acc, f) => acc + filaTapaKey(f.key, m).filter((v) => v !== "").length, 0);
-          return (
-            <div key={m.id} className="relative flex-shrink-0">
-              <button type="button" onClick={() => { setMuestraActivaId(m.id); setCampoActivo(null); }}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all flex items-center gap-1.5 ${m.id === muestraActivaId ? "bg-white text-[#E1000F] shadow border border-gray-200" : "text-gray-600 hover:bg-white/60"}`}>
-                M{m.id} {completas === 24 && <span className="text-green-500 text-xs">✓</span>}
-              </button>
-              {muestras.length > 1 && m.id === muestraActivaId && (
-                <button type="button" onClick={(e) => { e.stopPropagation(); eliminarMuestraActiva(); }}
-                  className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600">×</button>
-              )}
-            </div>
-          );
-        })}
-        <button type="button" onClick={agregarMuestra}
-          className="flex-shrink-0 px-3 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-white/60 flex items-center gap-1 transition-all">
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-          Muestra
-        </button>
-      </div>
+          return completas === 24 ? <span className="text-green-500 text-xs">✓</span> : null;
+        }}
+      />
 
       {/* Hora + operario */}
       <div className="bg-white rounded-2xl p-4 border border-gray-100 space-y-3" onClick={(e) => e.stopPropagation()}>

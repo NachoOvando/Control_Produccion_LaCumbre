@@ -25,6 +25,7 @@ import {
   esColisionRegistroUnico,
 } from "@/db/calidad.repository";
 import { createRegistroService, createRegistrosBatchService } from "./registro.service";
+import { schemaRoturaEncajado } from "@/lib/calidad/schemas/rotura-encajado.schema";
 
 const puntoControlMock = vi.mocked(prisma.puntoControl.findUnique);
 const puntoControlFindManyMock = vi.mocked(prisma.puntoControl.findMany);
@@ -117,5 +118,58 @@ describe("createRegistrosBatchService — mapeo de errores de persistencia (C6)"
 
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.code).toBe("ERROR_INTERNO");
+  });
+});
+
+// Control de Rotura en Encajado: valida el payload real del formulario contra el
+// schema real sembrado, pasando por las DOS capas (Zod estructural + AJV sobre
+// schemaJson). schemas.test.ts cubre AJV en aislamiento; esto cubre que filaProd
+// sobreviva a Zod y que las 2 máquinas de una hora lleguen juntas al repository.
+describe("createRegistrosBatchService — rotura en encajado (filaProd)", () => {
+  const dataRotura = (maquina: number) => ({
+    maquina,
+    unidades_muestreadas: 21,
+    golpeado_rotura_menor: 1,
+    golpeado_rotura_mayor: 0,
+    aplastado_rotura_leve: 0,
+    aplastado_rotura_intermedia: 0,
+    aplastado_rotura_mayor: 0,
+  });
+
+  beforeEach(() => {
+    puntoControlFindManyMock.mockResolvedValue([
+      { id: PC_ID, schemaJson: schemaRoturaEncajado, nombre: "Control de Rotura en Encajado", activo: true },
+    ] as never);
+    esColisionMock.mockReturnValue(false);
+    createBatchMock.mockResolvedValue([{ id: "r-1" }, { id: "r-2" }] as never);
+  });
+
+  it("acepta las 2 máquinas de una hora con el mismo nroMuestra y filaProd 1 y 2", async () => {
+    const res = await createRegistrosBatchService(
+      [
+        inputValido({ nroMuestra: 1, filaProd: 1, data: dataRotura(1) }),
+        inputValido({ nroMuestra: 1, filaProd: 2, data: dataRotura(2) }),
+      ],
+      RESP_ID
+    );
+
+    expect(res.ok).toBe(true);
+    // filaProd tiene que sobrevivir a Zod y llegar al repository: es lo que
+    // distingue las 2 máquinas dentro del mismo correlativo.
+    const enviados = createBatchMock.mock.calls[0][0];
+    expect(enviados).toHaveLength(2);
+    expect(enviados[0].filaProd).toBe(1);
+    expect(enviados[1].filaProd).toBe(2);
+    expect(enviados[0].nroMuestra).toBe(enviados[1].nroMuestra);
+  });
+
+  it("rechaza el batch si el payload no cumple el schema del punto de control", async () => {
+    const res = await createRegistrosBatchService(
+      [inputValido({ nroMuestra: 1, filaProd: 1, data: { maquina: 1 } })],
+      RESP_ID
+    );
+
+    expect(res.ok).toBe(false);
+    expect(createBatchMock).not.toHaveBeenCalled();
   });
 });
