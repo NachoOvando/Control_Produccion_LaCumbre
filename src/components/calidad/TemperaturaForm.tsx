@@ -9,7 +9,8 @@ import { usePersistedState } from "@/hooks/usePersistedState";
 import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
 import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
-import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
+import { RangoObjetivo, IndicadorSpec, specDeCampo, AvisoEvaluacionPendiente } from "@/components/calidad/IndicadorSpec";
+import type { FaseMuestra } from "@/lib/calidad/especificaciones";
 import { SelectorMuestras } from "@/components/calidad/SelectorMuestras";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
@@ -226,6 +227,13 @@ export function TemperaturaForm({ puntoControlId, lineaProductivaId, tipoFormula
   const completados = config.campos.filter((c) => c.requerido && muestraActiva.campos[c.key] !== "").length;
   const requeridos = config.campos.filter((c) => c.requerido).length;
 
+  // Política de dos capas. Acá los campos son escalares y no un array, así que la
+  // "muestra completa" es tener todos los requeridos cargados. Con eso el
+  // operario no ve el rango de aceptación mientras tipea la primera temperatura,
+  // pero sí la evaluación del conjunto antes de guardar — y el límite crítico se
+  // le avisa siempre, en el momento.
+  const faseMuestra: FaseMuestra = completados === requeridos ? "completa" : "capturando";
+
   if (exito) return <PantallaExito />;
 
   return (
@@ -313,6 +321,11 @@ export function TemperaturaForm({ puntoControlId, lineaProductivaId, tipoFormula
           <h2 className="text-sm font-bold text-gray-700">Mediciones — Muestra {muestraActiva.id}</h2>
           <span className="text-xs text-gray-400 font-medium">{completados}/{requeridos} requeridos</span>
         </div>
+        {productoActivo.especificaciones?.length ? (
+          <div className="mb-3">
+            <AvisoEvaluacionPendiente visible={faseMuestra === "capturando"} />
+          </div>
+        ) : null}
         <div className="grid grid-cols-2 gap-2">
           {config.campos.map((campo) => {
             const val = muestraActiva.campos[campo.key];
@@ -329,9 +342,9 @@ export function TemperaturaForm({ puntoControlId, lineaProductivaId, tipoFormula
                 </p>
                 <div className="flex items-center gap-1.5">
                   <p className={`text-xl font-bold font-mono ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>{val || "—"}</p>
-                  {spec && <IndicadorSpec valor={valNum} spec={spec} conTexto />}
+                  {spec && <IndicadorSpec valor={valNum} spec={spec} fase={faseMuestra} conTexto />}
                 </div>
-                {spec && <div className="mt-0.5"><RangoObjetivo spec={spec} /></div>}
+                {spec && <div className="mt-0.5"><RangoObjetivo spec={spec} fase={faseMuestra} /></div>}
               </button>
             );
           })}

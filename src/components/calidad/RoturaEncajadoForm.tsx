@@ -18,7 +18,8 @@ import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
-import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
+import { RangoObjetivo, IndicadorSpec, specDeCampo, AvisoEvaluacionPendiente } from "@/components/calidad/IndicadorSpec";
+import type { FaseMuestra } from "@/lib/calidad/especificaciones";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
@@ -390,6 +391,17 @@ export function RoturaEncajadoForm({ puntoControlId, lineaProductivaId, producto
   // haría leer "estamos en spec" sobre un denominador incompleto.
   const agregadoIncompleto = cargando || errorRegistros != null;
 
+  // Política de dos capas. Igual que en PesoOppForm, el agregado incluye las
+  // muestras EN PANTALLA, así que se mueve mientras el operario carga: con el
+  // semáforo de aceptación en vivo, ve cuántas roturas más "le entran" antes de
+  // salirse de spec. Solo se revela cuando toda máquina muestreada tiene sus
+  // unidades y sus contadores cargados.
+  const faseAgregado: FaseMuestra = muestrasEnPantalla.every(
+    (m) => Number.isFinite(m.unidadesMuestreadas) && m.unidadesMuestreadas > 0
+  )
+    ? "completa"
+    : "capturando";
+
   if (exito) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[50vh] gap-4">
@@ -452,9 +464,10 @@ export function RoturaEncajadoForm({ puntoControlId, lineaProductivaId, producto
                 </p>
                 {/* Sin indicador de spec si el agregado está incompleto: sería
                     señalizar conformidad sobre un denominador parcial. */}
-                {spec && !agregadoIncompleto && <IndicadorSpec valor={valor} spec={spec} />}
+                {spec && !agregadoIncompleto && <IndicadorSpec valor={valor} spec={spec} fase={faseAgregado} />}
               </div>
-              {spec && <RangoObjetivo spec={spec} />}
+              {spec && <RangoObjetivo spec={spec} fase={faseAgregado} />}
+              {spec && <AvisoEvaluacionPendiente visible={faseAgregado === "capturando"} />}
             </div>
           ))}
         </div>
@@ -507,6 +520,11 @@ export function RoturaEncajadoForm({ puntoControlId, lineaProductivaId, producto
             const pct = porcentajesRotura(conteos, unidades);
             const totales = totalesRotura(conteos);
             const excede = Number.isFinite(unidades) && totales.total > unidades;
+            // El % de rotura de ESTA máquina solo se evalúa contra objetivo
+            // cuando el denominador está cargado: sin unidades muestreadas el
+            // porcentaje no significa nada.
+            const faseMaquina: FaseMuestra =
+              Number.isFinite(unidades) && unidades > 0 ? "completa" : "capturando";
 
             return (
               <div
@@ -687,7 +705,7 @@ export function RoturaEncajadoForm({ puntoControlId, lineaProductivaId, producto
                         <span className="text-sm font-bold font-mono text-gray-900">
                           Total {fmtPct(pct.total)}
                         </span>
-                        {specTotal && <IndicadorSpec valor={pct.total} spec={specTotal} conTexto />}
+                        {specTotal && <IndicadorSpec valor={pct.total} spec={specTotal} fase={faseMaquina} conTexto />}
                       </span>
                     </div>
 

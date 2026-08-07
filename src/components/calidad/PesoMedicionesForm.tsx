@@ -6,9 +6,9 @@ import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { RegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
-import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
+import { RangoObjetivo, IndicadorSpec, specDeCampo, AvisoEvaluacionPendiente } from "@/components/calidad/IndicadorSpec";
 import { SelectorMuestras } from "@/components/calidad/SelectorMuestras";
-import { evaluarValor } from "@/lib/calidad/especificaciones";
+import { evaluarValor, type FaseMuestra } from "@/lib/calidad/especificaciones";
 import { calcularCoberturaPorObservacion } from "@/lib/calidad/peso-cobertura";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
 import { usePersistedState } from "@/hooks/usePersistedState";
@@ -187,6 +187,14 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
 
   const muestraActiva = muestras.find((m) => m.id === muestraActivaId)!;
   const muestraActivaIdx = muestras.findIndex((m) => m.id === muestraActivaId);
+
+  // Política de dos capas: la evaluación contra objetivo/aceptación se revela
+  // solo con las 12 mediciones cargadas. Mientras falte alguna, un operario que
+  // ve ámbar en el pico 3 sabe hacia dónde mover el pico 4 — y eso convierte el
+  // registro en una negociación con el semáforo en vez de una medición.
+  const faseMuestra: FaseMuestra = muestraActiva.mediciones.every((v) => v !== "")
+    ? "completa"
+    : "capturando";
 
   // Contador de IDs independiente del ciclo de render — ver TemperaturaForm.tsx
   // para el razonamiento completo (evita colisión de id ante doble-tap en "+ Muestra").
@@ -526,12 +534,18 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
           <h2 className="text-sm font-bold text-gray-700">
             Mediciones — Muestra {muestraActiva.id}
             {/* Cada peso se compara contra la misma spec del producto (array_cada) */}
-            {specMediciones && <span className="ml-2"><RangoObjetivo spec={specMediciones} /></span>}
+            {specMediciones && <span className="ml-2"><RangoObjetivo spec={specMediciones} fase={faseMuestra} /></span>}
           </h2>
           <span className="text-xs text-gray-400 font-medium">
             {muestraActiva.mediciones.filter((v) => v !== "").length}/12 completadas
           </span>
         </div>
+
+        {specMediciones && (
+          <div className="mb-3">
+            <AvisoEvaluacionPendiente visible={faseMuestra === "capturando"} />
+          </div>
+        )}
 
         <div className="grid grid-cols-4 gap-2">
           {muestraActiva.mediciones.map((val, idx) => {
@@ -556,7 +570,7 @@ function PesoMedicionesFormStandard({ puntoControlId, lineaProductivaId, tipoFor
               >
                 <span className="flex items-center justify-between">
                   <span className="text-xs font-bold text-gray-400">Pico {idx + 1}</span>
-                  {specMediciones && <IndicadorSpec valor={valNum} spec={specMediciones} />}
+                  {specMediciones && <IndicadorSpec valor={valNum} spec={specMediciones} fase={faseMuestra} />}
                 </span>
                 <span className={`text-base font-bold font-mono leading-tight ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>
                   {val || "—"}
@@ -935,6 +949,16 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
     (acc, f) => acc + filaTapaKey(f.key, muestraActiva).filter((v) => v !== "").length, 0
   );
 
+  // Política de dos capas. Acá la muestra son las filas medidas (tapa sin bañar y
+  // tapa con baño): la cobertura es derivada por resta apareada, así que se
+  // completa sola cuando están las dos filas. Se exige que TODAS las celdas
+  // medidas estén cargadas antes de revelar la evaluación del conjunto.
+  const celdasMedidasTotales = FILAS_TAPA.reduce(
+    (acc, f) => acc + filaTapaKey(f.key, muestraActiva).length, 0
+  );
+  const faseMuestra: FaseMuestra =
+    celdasMedidasTotales > 0 && completadasTotal === celdasMedidasTotales ? "completa" : "capturando";
+
   return (
     <div className="space-y-4" onClick={() => { if (campoActivo) setCampoActivo(null); }}>
 
@@ -1014,7 +1038,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-gray-700">
                 {fila.label}
-                {spec && <span className="ml-2"><RangoObjetivo spec={spec} /></span>}
+                {spec && <span className="ml-2"><RangoObjetivo spec={spec} fase={faseMuestra} /></span>}
               </h2>
               <span className="text-xs text-gray-400 font-medium">{completadas}/12</span>
             </div>
@@ -1029,7 +1053,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
                     className={`rounded-xl border-2 p-2 text-left transition-all active:scale-95 aspect-square flex flex-col justify-between ${isActivo ? fila.colorActivo + " shadow-md" : tieneValor ? fila.colorLleno : fila.color + " hover:bg-gray-100"}`}>
                     <span className="flex items-center justify-between">
                       <span className="text-xs font-bold text-gray-400">Pico {idx + 1}</span>
-                      {spec && <IndicadorSpec valor={valNum} spec={spec} />}
+                      {spec && <IndicadorSpec valor={valNum} spec={spec} fase={faseMuestra} />}
                     </span>
                     <span className={`text-base font-bold font-mono leading-tight ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>{val || "—"}</span>
                   </button>
@@ -1060,7 +1084,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-bold text-amber-800">
             COBERTURA (con baño − sin bañar)
-            {specCobertura && <span className="ml-2"><RangoObjetivo spec={specCobertura} /></span>}
+            {specCobertura && <span className="ml-2"><RangoObjetivo spec={specCobertura} fase={faseMuestra} /></span>}
           </h2>
         </div>
         <div className="grid grid-cols-4 gap-2">
@@ -1070,7 +1094,7 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
               <div key={idx} className={`rounded-xl border-2 p-2 aspect-square flex flex-col justify-between ${tieneValor ? "border-amber-300 bg-white" : "border-gray-200 bg-gray-50"}`}>
                 <span className="flex items-center justify-between">
                   <span className="text-xs font-bold text-gray-400">Pico {idx + 1}</span>
-                  {specCobertura && tieneValor && <IndicadorSpec valor={val} spec={specCobertura} />}
+                  {specCobertura && tieneValor && <IndicadorSpec valor={val} spec={specCobertura} fase={faseMuestra} />}
                 </span>
                 <span className={`text-base font-bold font-mono leading-tight ${tieneValor ? "text-gray-900" : "text-gray-300"}`}>
                   {tieneValor ? val.toFixed(1) : "—"}
@@ -1096,8 +1120,14 @@ function PesoBanoTapitasMode({ puntoControlId, lineaProductivaId, productoActivo
         )}
       </div>
 
-      {/* Resumen de fuera de especificación al completar la muestra */}
-      {(specTapa || specCobertura) && completadasTotal === 24 && (
+      {/* Resumen de fuera de especificación — solo con la muestra completa. Este
+          formulario ya lo gateaba antes de que existiera la política de dos
+          capas; ahora usa la misma señal que el resto para no tener dos
+          criterios de "muestra completa" que puedan divergir. */}
+      {(specTapa || specCobertura) && (
+        <AvisoEvaluacionPendiente visible={faseMuestra === "capturando"} />
+      )}
+      {(specTapa || specCobertura) && faseMuestra === "completa" && (
         <div className={`rounded-2xl p-3 text-sm font-semibold text-center ${fueraDeSpecCount > 0 ? "bg-red-50 border border-red-200 text-red-700" : "bg-green-50 border border-green-200 text-green-700"}`}>
           {fueraDeSpecCount > 0
             ? `⚠ ${fueraDeSpecCount} valor${fueraDeSpecCount !== 1 ? "es" : ""} fuera de especificación en esta muestra`

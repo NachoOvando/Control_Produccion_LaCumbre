@@ -11,6 +11,7 @@ import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/Regist
 import { calcularVencimiento } from "@/lib/calidad/lote-pt";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
+import type { FaseMuestra } from "@/lib/calidad/especificaciones";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
 type Props = { puntoControlId: string; lineaProductivaId: string; productoActivo: ProductoActivoLinea };
@@ -346,6 +347,15 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
                   // Spec de calidad para "peso_alfajor" (si el producto la tiene cargada)
                   const spec = key === "peso_alfajor" ? specDeCampo(productoActivo.especificaciones, "peso_alfajor") : null;
                   const valNum = entrada[key] ? parseFloat(entrada[key]) : null;
+                  // Política de dos capas. Acá la "muestra" es la entrada de
+                  // pallet, y el único campo con spec es un escalar: la
+                  // evaluación se revela cuando los campos numéricos de la
+                  // entrada están completos, no mientras se tipea el primero.
+                  const faseEntrada: FaseMuestra = camposNumericos.every(
+                    (c) => entrada[c.key] !== ""
+                  )
+                    ? "completa"
+                    : "capturando";
                   return (
                     <button key={key} type="button" aria-disabled={bloqueado}
                       onClick={() => { if (!bloqueado) setCampoActivo({ entradaId: entrada.id, campo: key }); }}
@@ -355,10 +365,10 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
                         <p className={`text-xl font-bold font-mono mt-0.5 ${entrada[key] ? "text-gray-900" : "text-gray-300"}`}>
                           {entrada[key] || "—"}{entrada[key] && unidad ? <span className="text-xs font-normal text-gray-400 ml-0.5">{unidad}</span> : null}
                         </p>
-                        {spec && <IndicadorSpec valor={valNum} spec={spec} conTexto />}
+                        {spec && <IndicadorSpec valor={valNum} spec={spec} fase={faseEntrada} conTexto />}
                       </div>
                       {bloqueado && <p className="text-[11px] text-green-600 mt-0.5">Estándar del producto</p>}
-                      {spec && !bloqueado && <div className="mt-0.5"><RangoObjetivo spec={spec} /></div>}
+                      {spec && !bloqueado && <div className="mt-0.5"><RangoObjetivo spec={spec} fase={faseEntrada} /></div>}
                     </button>
                   );
                 })}

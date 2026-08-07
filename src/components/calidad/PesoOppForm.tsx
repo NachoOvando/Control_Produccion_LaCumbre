@@ -18,7 +18,8 @@ import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
-import { RangoObjetivo, IndicadorSpec, specDeCampo } from "@/components/calidad/IndicadorSpec";
+import { RangoObjetivo, IndicadorSpec, specDeCampo, AvisoEvaluacionPendiente } from "@/components/calidad/IndicadorSpec";
+import type { FaseMuestra } from "@/lib/calidad/especificaciones";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
 import { usePersistedState } from "@/hooks/usePersistedState";
 import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
@@ -147,6 +148,16 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
   // tiene lo de pantalla — no es "el lote". Mostrarlo igual sería señalizar
   // conformidad sobre un denominador incompleto.
   const agregadoIncompleto = cargando || errorRegistros != null;
+
+  // Política de dos capas aplicada al agregado del LOTE. Ojo: `agregado` incluye
+  // `pesosEnPantalla`, o sea el borrador que el operario está tipeando — no es un
+  // número histórico e inmanipulable. Con el semáforo de aceptación en vivo sobre
+  // este promedio (que es el número más grande de la pantalla), el operario ve
+  // exactamente cuánto le falta para "entrar en rango" y qué tiene que pesar el
+  // paquete siguiente. Solo se revela cuando no quedan celdas a medio cargar.
+  const faseAgregado: FaseMuestra = muestras.every((m) => m.mediciones.every((v) => v !== ""))
+    ? "completa"
+    : "capturando";
 
   // ── Mutadores ─────────────────────────────────────────────────────────────
 
@@ -364,10 +375,10 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
           {/* Sin indicador de spec si el agregado está incompleto o vacío: sería
               señalizar conformidad sobre un denominador parcial. */}
           {specPeso && agregado && !agregadoIncompleto && (
-            <IndicadorSpec valor={agregado.promedio} spec={specPeso} conTexto />
+            <IndicadorSpec valor={agregado.promedio} spec={specPeso} fase={faseAgregado} conTexto />
           )}
         </div>
-        {specPeso && <RangoObjetivo spec={specPeso} />}
+        {specPeso && <RangoObjetivo spec={specPeso} fase={faseAgregado} />}
         {agregadoIncompleto ? (
           <p className="text-xs text-gray-600 mt-2">
             {cargando
@@ -386,6 +397,11 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
 
       {muestras.map((muestra, idx) => {
         const stats = estadisticasMediciones(muestra.mediciones);
+        // Política de dos capas: hasta que estén los 10 paquetes cargados, solo
+        // se revela la capa crítica.
+        const faseMuestra: FaseMuestra = muestra.mediciones.every((v) => v !== "")
+          ? "completa"
+          : "capturando";
         const nc = noConformesNum(muestra);
 
         return (
@@ -419,12 +435,26 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
                 <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
                   Peso de {CANTIDAD_PAQUETES} paquetes (g)
                 </p>
-                {specPeso && <RangoObjetivo spec={specPeso} />}
+                {specPeso && <RangoObjetivo spec={specPeso} fase={faseMuestra} />}
               </div>
+              {specPeso && (
+                <div className="mb-2">
+                  <AvisoEvaluacionPendiente visible={faseMuestra === "capturando"} />
+                </div>
+              )}
 
-              {/* Promedio de ESTA muestra, ANTES de la grilla de carga: el operario
-                  tiene que ver hacia dónde va el promedio mientras carga, no
-                  recién al final cuando ya no puede reaccionar sobre esa muestra. */}
+              {/* Promedio de ESTA muestra, ANTES de la grilla de carga, para que el
+                  operario lo tenga a la vista mientras trabaja.
+
+                  El indicador de spec sobre ese promedio, en cambio, respeta la
+                  política de dos capas: hasta completar los 10 paquetes solo se
+                  revela el límite crítico. Esto REVIERTE la decisión anterior de
+                  este formulario ("tiene que ver hacia dónde va el promedio
+                  mientras carga"): un promedio parcial con semáforo de aceptación
+                  en vivo le dice al operario cuánto tiene que pesar el paquete
+                  siguiente para cerrar dentro del rango, y eso es acomodar el
+                  dato, no medirlo. La ventana de acción real es la muestra
+                  siguiente, no el paquete siguiente. */}
               {stats && (
                 <div className="mb-2 flex items-center justify-between gap-2 bg-gray-50 rounded-xl px-3 py-2">
                   <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
@@ -435,7 +465,7 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
                     <span className="text-sm font-bold font-mono text-gray-900">
                       Prom. {stats.promedio.toFixed(1)} g
                     </span>
-                    {specPeso && <IndicadorSpec valor={stats.promedio} spec={specPeso} conTexto />}
+                    {specPeso && <IndicadorSpec valor={stats.promedio} spec={specPeso} fase={faseMuestra} conTexto />}
                   </span>
                 </div>
               )}
@@ -470,7 +500,7 @@ export function PesoOppForm({ puntoControlId, lineaProductivaId, productoActivo 
                       </span>
                       {specPeso && num != null && (
                         <span className="block mt-0.5">
-                          <IndicadorSpec valor={num} spec={specPeso} />
+                          <IndicadorSpec valor={num} spec={specPeso} fase={faseMuestra} />
                         </span>
                       )}
                     </button>
