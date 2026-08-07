@@ -6,6 +6,106 @@
 
 ---
 
+## [2026-08-07] - Idempotencia de ingesta, 2 bindings rotos, y política de dos capas
+
+Origen: el usuario pidió dos cosas — *"relevar las Especificaciones del maestro para
+que no haya carga de datos repetidos"* y *"ver el sistema para casos donde se pierde
+la conexión a internet"*. El relevamiento mostró que **ninguno de los dos era el
+problema que parecía**, y que había un hallazgo de integridad activo en producción.
+
+### Lo que se cerró (commits `e1832a0` y `f003307`, rama Dev)
+
+**1. Duplicación silenciosa de registros HACCP.** `POST /registros/batch` no era
+idempotente: la transacción commitea, el WiFi de planta se corta antes de que vuelva
+el 201, el operario ve *"Error de conexión, intentá de nuevo"* —el mensaje lo invita
+a reintentar— y el reintento crea un segundo juego completo de registros con
+`nro_muestra` consecutivo. `registro_unico` no lo atrapa porque el correlativo lo
+asigna el servidor. En Rotura en Encajado un duplicado **diluye una desviación real
+hacia "en spec"**: el sistema pasa de no detectar a afirmar que estaba bien.
+
+Fix: `registros_calidad.client_request_id` (uuid, UNIQUE simple, nullable), UUID v4
+generado en el dispositivo. **El dedupe corre ANTES de incrementar `SecuenciaDiaria`**
+— al revés, el reintento consume correlativos y deja huecos en la numeración diaria.
+
+**Se descartó el índice único parcial que proponía ADR-017** sobre
+`(punto_control_id, lote_id, fecha, hora, fila_prod)`: falsos positivos (las 12 filas
+de `defectos_conformado` comparten `hora`, los formularios de peso mandan
+`fila_prod = NULL`) que rechazarían registros HACCP legítimos, y falsos negativos si
+el reintento recalcula la hora. El motivo quedó escrito en la migración. **No
+reintroducirlo.**
+
+**2. Dos bindings de especificación rotos.**
+- `peso_bano @ Control Peso Baño Alfajor` apuntaba a `mediciones`, que contiene el
+  peso del **sandwich completo** (cota 0-200 g), no el del baño (~5-8 g), con
+  `agregacion: "derivado"` enmascarando la inconsistencia. Con una spec cargada
+  habría marcado el **100% de la producción fuera de crítico**.
+- `peso_neto @ Defectos de Conformado` apuntaba a `filas[].peso_neto` y el schema no
+  tiene ninguna clave `filas`: cada pico es un registro separado, distinguido por la
+  columna `fila_prod`. El evaluador habría leído `undefined` y salteado el parámetro
+  en silencio.
+
+Ninguno tenía especificaciones cargadas, así que no alcanzaron a afectar datos.
+
+**Por qué pasaron desapercibidos:** el invariante de `campoData` estaba escrito a
+medias (exigía que un `campoData` inexistente fuera `derivado`, pero no que uno REAL
+no lo fuera) y el test replicaba a mano solo los 2 PC de ADR-017. **Una fuente que
+se replica a mano no es un guardarraíl.** Ahora `src/lib/calidad/schemas/bindings.ts`
+es fuente única para el seed y el test, los 8 schemas con bindings salieron de
+`prisma/seed.ts` a `puntos-control.schema.ts` (no se podían importar: el seed ejecuta
+`main()` al cargarse), y el invariante es un **XOR** con las dos mitades.
+
+**3. Política de dos capas en la visibilidad de especificación (decisión del
+usuario, auditada por `scm-alimentos`).** Crítico visible siempre y en vivo;
+objetivo/aceptación se revelan solo con la muestra completa. Aplica a los 5
+formularios que antes mostraban todo en vivo. Motivo: `peso_neto` es contenido neto
+declarado, con exposición regulatoria de lealtad comercial además de contractual con
+Arcor; un semáforo en vivo celda por celda es un incentivo a "acomodar" el número, y
+eso es un hallazgo de **integridad de registros**, no de calidad de dato. Revierte la
+decisión previa de `PesoOppForm` ("ver hacia dónde va el promedio mientras carga"):
+la ventana de acción real es la muestra siguiente, no la celda siguiente.
+
+**4. Bug de paso:** el batch devolvía `count: created.length` y `ops` tiene 2
+entradas por registro (registro + auditoría) — el endpoint **reportaba el doble**.
+
+**5. Pérdida de captura:** los 5 formularios sin borrador ahora persisten lo
+capturado. `DetectorMetalesForm` era el PCC1 y el único control crítico donde un
+refresh borraba la verificación entera.
+
+### Correcciones a la memoria del proyecto
+
+- **`DIRECT_URL` nunca fue un bloqueo real.** `npx prisma migrate status` →
+  *"Database schema is up to date!"*. La migración de ADR-017 estaba aplicada.
+- `npm run lint` **no corre**: `next lint` pide crear la config de ESLint desde
+  cero, el repo nunca la tuvo. Carencia previa, sin resolver.
+
+### Decisiones de negocio cerradas con el usuario (NO re-litigar)
+
+| # | Definición |
+|---|---|
+| D1 | Las 3 pesadas (sandwich con baño / sin baño / tapa con cobertura) se toman en **una sola muestra**. |
+| D2 | Las 12 `mediciones` de Peso Relleno son **el relleno neto restado a mano** por el operario — se pierde el dato primario. |
+| D3 | El apareamiento es **por población, no por unidad física**. Por eso los derivados son **un escalar por muestra** sobre promedios, no 12 valores fila a fila: derivar fila a fila sería ruido con forma de dato. |
+| D4 | El sandwich sin baño se arma con **2 tapas con cobertura**. |
+| D5 | Política de dos capas (implementada). |
+| D6 | El PCC1 **sí** va offline, con pantalla de bloqueo (el usuario eligió esto por sobre la recomendación de `scm-alimentos` de dejarlo online-only). |
+| D7 | Dispositivos de planta: **Android**. |
+
+`scm-alimentos` **rechazó** mover `tipo` (`sin_bano`/`con_bano`) y `tipo_producto` a
+columnas de `Producto`: no son atributos del SKU, son el **estado de la muestra en el
+proceso** — son el mecanismo del par apareado, y derivarlos del maestro destruiría el
+cálculo de peso de baño. Solo `tipo_relleno` / `presencia_bob` califican, y con
+anclaje **al lote**, no al "producto activo de la línea".
+
+### Plan pendiente
+
+`~/.claude/plans/continuemos-trabajando-wiggly-wreath.md`. Lotes 2 (cola offline con
+IndexedDB), 3 (PWA con serwist), 4 (PCC con pantalla de bloqueo — **bloqueado por la
+lista real de PCC del plan HACCP**) y A (unificación gravimétrica, desbloqueado por
+D1-D4). El endpoint `captura-bootstrap` se movió del Lote 1 al Lote 2: hoy sería un
+endpoint sin consumidor.
+
+---
+
 ### [2026-07-29] - Flujo de ramas git: `Dev` para desarrollo, `main` definitivo
 
 - **Contexto:** hasta ahora todo el trabajo se commiteaba y pusheaba directo a `main` (única rama del repo, local y remota). El usuario pidió separar el flujo: desarrollar en una rama `Dev`, y pasar algo a `main` solo cuando lo considere definitivo.

@@ -5,11 +5,52 @@
 > pensando ahora, cuál es el próximo paso concreto, y qué está bloqueado.
 > Actualizalo al cerrar cada sesión, antes de cortar.
 
-**Última actualización:** 29/07/2026
+**Última actualización:** 07/08/2026
 
 ## Enfoque actual
 
-Cerrado en esta sesión: auditoría integral de flujos CRUD
+Ejecutando el plan de `~/.claude/plans/continuemos-trabajando-wiggly-wreath.md`,
+lote por lote, en `Dev`. **Lote 0 y Lote 1 cerrados y pusheados** (`e1832a0`,
+`f003307`).
+
+Arrancó de dos pedidos: eliminar la carga de datos repetidos del maestro, y
+resolver qué pasa cuando se pierde internet en planta. El relevamiento mostró que
+ninguno de los dos era el problema que parecía — el detalle completo está en
+`docs/LOG_CONTEXTO.md`, hito 2026-08-07. En corto, lo que se cerró:
+
+- **La duplicación silenciosa de registros HACCP** por reintento tras corte de red,
+  que era el único hallazgo de integridad activo en producción. Deuda escalada en
+  ADR-017 y sin resolver hasta ahora. Verificado end-to-end contra la DB real,
+  con contraprueba de que sin la clave el duplicado sí ocurría.
+- **Dos bindings de especificación rotos** (`peso_bano` y `peso_neto`), ninguno con
+  specs cargadas todavía, más el guardarraíl que debía atraparlos y no podía.
+- **La política de dos capas** en la visibilidad de especificación (tu decisión D5).
+
+### Lo que sigue, en orden
+
+**Lote A — unificación gravimétrica.** Desbloqueado: ya están las 4 definiciones
+metrológicas (D1-D4 en `docs/LOG_CONTEXTO.md`). Es el que responde al pedido
+original: hoy Control Peso Relleno **persiste una resta que el operario hace de
+cabeza**, y el dato primario no queda en ningún lado — ante un reclamo de Arcor no
+se puede distinguir si el desvío vino de la dosificación de DDL o de tapas fuera de
+gramaje.
+
+**Lote 2 — cola offline** (IndexedDB + `idb`, capas puertos/adaptadores en
+`lib/offline/`). Incluye el endpoint `captura-bootstrap`, que se movió del Lote 1
+porque hoy sería un endpoint sin consumidor.
+
+**Lote 3 — PWA** (`@serwist/next`). Último a propósito: el escenario dominante en
+planta es "la app está abierta y se cae el WiFi", y eso lo cubre el Lote 2 sin
+service worker.
+
+**Lote 4 — PCC con pantalla de bloqueo.** **Bloqueado** por la lista real de PCC del
+plan HACCP.
+
+---
+
+### Sesión anterior (29/07/2026)
+
+Cerrado: auditoría integral de flujos CRUD
 (`AUDITORIA_FLUJOS_DATOS.md`, agentes `audit-planner`/`fix-executor` nuevos
 en `.claude/agents/`), fix del pipeline de build de Vercel (Prisma Client
 nunca se generaba — `"build": "prisma generate && next build"`), y **flujo
