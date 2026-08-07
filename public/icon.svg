@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="La Cumbre — Control de Producción">
+  <!--
+    Icono de la PWA. Usa la misma identidad visual que ya tiene la pantalla de
+    login (las iniciales "LC" sobre el rojo #E1000F) — no se inventó ningún logo.
+
+    Es un SVG y no un juego de PNG a propósito: Chrome en Android (los
+    dispositivos de planta, D7) acepta SVG con sizes="any" para instalar la app, y
+    un solo archivo vectorial no se pixela en ninguna densidad de pantalla.
+
+    PENDIENTE del usuario: si existe el logo oficial de La Cumbre como asset,
+    reemplazar este archivo por el juego de PNG 192/512 + maskable. Este icono es
+    funcional, no definitivo.
+
+    El área segura de un icono "maskable" es el 80% central (Android recorta los
+    bordes en círculo o squircle según el launcher), así que el texto se mantiene
+    bien adentro de ese margen.
+  -->
+  <rect width="512" height="512" fill="#E1000F"/>
+  <text
+    x="256" y="256"
+    fill="#FFFFFF"
+    font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+    font-size="200"
+    font-weight="700"
+    letter-spacing="4"
+    text-anchor="middle"
+    dominant-baseline="central"
+  >LC</text>
+</svg>

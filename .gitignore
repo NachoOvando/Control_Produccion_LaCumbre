@@ -43,3 +43,11 @@ prisma/migrations/**/migration_lock.toml
 
 # backups de DB — datos reales, nunca al repo
 /backups/
+
+# service worker generado por serwist en cada build (swDest en next.config.mjs).
+# Es un artefacto de build con el manifest de precache hasheado: commitearlo
+# generaría conflictos en cada merge y quedaría desalineado del bundle real.
+# La FUENTE del SW es src/app/sw.ts, y esa sí va al repo.
+/public/sw.js
+/public/sw.js.map
+/public/swe-worker-*.js
