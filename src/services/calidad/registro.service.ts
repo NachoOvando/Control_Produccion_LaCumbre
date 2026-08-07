@@ -19,6 +19,8 @@ import {
   createRegistrosBatchDB,
   getTurnoByHora,
   esColisionRegistroUnico,
+  esColisionClientRequestId,
+  ClientRequestIdAjenoError,
 } from "@/db/calidad.repository";
 import type { RegistroCalidadInput } from "@/types/calidad";
 
@@ -34,6 +36,12 @@ const RegistroInputSchema = z.object({
   nroMuestra: z.number().int().min(1, "nroMuestra debe ser mayor a 0"),
   filaProd: z.number().int().min(1).optional(),
   notas: z.string().max(1000).optional(),
+  // Clave de idempotencia generada en el dispositivo. Opcional para no romper
+  // los caminos internos ni el histórico; sin ella el guardado se comporta como
+  // antes (o sea, un reintento duplica). Se valida como UUID porque la columna
+  // es `uuid` en Postgres: un string arbitrario haría fallar el insert con un
+  // error de tipo en vez de una validación clara.
+  clientRequestId: z.string().uuid("clientRequestId debe ser UUID").optional(),
   data: z.record(z.string(), z.unknown()),
 });
 
@@ -42,8 +50,19 @@ export type CreateRegistroResult =
   | { ok: false; error: string; code: string; details?: unknown };
 
 export type BatchRegistroResult =
-  | { ok: true; data: { count: number } }
+  | { ok: true; data: { count: number; creados: number; yaExistian: number } }
   | { ok: false; error: string; code: string; details?: unknown };
+
+// Mensaje único para el caso "mandaste un clientRequestId que ya existe pero es
+// de otro registro". NO se devuelve el registro existente ni ninguno de sus
+// datos: un cliente que adivine o reuse una clave ajena no puede usar este
+// endpoint para leer registros de otra línea o de otro lote.
+const ERROR_CLIENT_REQUEST_ID_AJENO = {
+  ok: false as const,
+  error:
+    "El identificador de captura ya corresponde a otro registro. Recargá el formulario y volvé a cargar la muestra.",
+  code: "CLIENT_REQUEST_ID_AJENO",
+};
 
 export async function createRegistroService(rawInput: unknown): Promise<CreateRegistroResult> {
   const parsed = RegistroInputSchema.safeParse(rawInput);
@@ -91,6 +110,24 @@ export async function createRegistroService(rawInput: unknown): Promise<CreateRe
     const registro = await createRegistroCalidad({ ...input, turnoId });
     return { ok: true, data: registro };
   } catch (err) {
+    if (err instanceof ClientRequestIdAjenoError) return ERROR_CLIENT_REQUEST_ID_AJENO;
+    // Carrera entre dos reintentos concurrentes del mismo evento: el registro
+    // quedó guardado una sola vez, que es el resultado deseado. Se informa como
+    // éxito idempotente en vez de como error, para que el operario no reintente
+    // una tercera vez sobre algo que ya está bien.
+    if (esColisionClientRequestId(err)) {
+      const yaGuardado = await prisma.registroCalidad.findUnique({
+        where: { clientRequestId: input.clientRequestId },
+        include: {
+          puntoControl: true,
+          lote: { include: { producto: true } },
+          lineaProductiva: true,
+          responsable: { select: { id: true, nombre: true } },
+          turno: { select: { id: true, nombre: true } },
+        },
+      });
+      if (yaGuardado) return { ok: true, data: yaGuardado };
+    }
     // Conflicto de negocio conocido (C6, AUDIT_PLAN.md Lote 2): con la
     // asignación atómica de nroMuestra esto no debería ocurrir en operación
     // normal, pero se distingue igual de un bug real en vez de ambos caer en
@@ -193,9 +230,21 @@ export async function createRegistrosBatchService(
   });
 
   try {
-    const created = await createRegistrosBatchDB(itemsConTurno);
-    return { ok: true, data: { count: created.length } };
+    const { creados, yaExistian } = await createRegistrosBatchDB(itemsConTurno);
+    // `count` se mantiene por compatibilidad con los clientes actuales, pero
+    // ahora cuenta REGISTROS y no operaciones: antes se devolvía la longitud de
+    // `ops` (registro + auditoría por cada uno), o sea el doble.
+    return { ok: true, data: { count: creados + yaExistian, creados, yaExistian } };
   } catch (err) {
+    if (err instanceof ClientRequestIdAjenoError) return ERROR_CLIENT_REQUEST_ID_AJENO;
+    // Carrera entre reintentos concurrentes del mismo batch. A diferencia del
+    // camino individual no se reconstruye la respuesta: el batch es atómico, así
+    // que si rebotó acá no se escribió nada nuevo y el juego de registros del
+    // request que ganó ya está completo en la base. Se informa como éxito
+    // idempotente para que el operario no reintente sobre algo ya guardado.
+    if (esColisionClientRequestId(err)) {
+      return { ok: true, data: { count: itemsConTurno.length, creados: 0, yaExistian: itemsConTurno.length } };
+    }
     // Ver nota equivalente en createRegistroService — C6.
     if (esColisionRegistroUnico(err)) {
       return {

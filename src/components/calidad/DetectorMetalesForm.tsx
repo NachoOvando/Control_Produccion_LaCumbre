@@ -5,6 +5,8 @@ import { useState } from "react";
 import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import type { ProductoActivoLinea } from "@/types/calidad";
 
@@ -57,10 +59,26 @@ function CNCPar({ label, valor, onChange }: { label: string; valor: EstadoCNC; o
 
 export function DetectorMetalesForm({ puntoControlId, lineaProductivaId, productoActivo }: Props) {
   const { data: session } = useSession();
-  const { enviando, error, exito, guardar } = useBatchGuardar();
 
   const loteId = productoActivo.loteId;
-  const [form, setForm] = useState<FormData>(crearFormVacio());
+
+  // Persistencia del borrador. Este formulario es el PCC1 y era el único
+  // control crítico donde un refresh del navegador —o que la tablet se
+  // bloqueara— borraba la verificación entera sin dejar rastro.
+  //
+  // `hora` se persiste junto con el resto a propósito: es la hora en que el
+  // operario hizo la verificación, no la del render. Si la tablet se recarga a
+  // las 10:20 una verificación empezada a las 10:00, restaurar 10:00 es lo
+  // honesto para un registro HACCP.
+  const [form, setForm, limpiarProgreso] = usePersistedState<FormData>(
+    claveProgresoMuestras({ lineaProductivaId, loteId, puntoControlId }),
+    crearFormVacio
+  );
+
+  // El borrador se descarta solo al guardar bien — si no, la verificación de la
+  // hora siguiente arrancaría con los valores de la anterior ya tildados.
+  const { enviando, error, exito, guardar } = useBatchGuardar("/calidad", limpiarProgreso);
+
   const [numpadActivo, setNumpadActivo] = useState(false);
   const [validar, setValidar] = useState(false);
 

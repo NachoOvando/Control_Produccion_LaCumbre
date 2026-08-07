@@ -12,3 +12,12 @@ export function claveProgresoMuestras(params: {
   const { lineaProductivaId, loteId, puntoControlId } = params;
   return `calidad:muestras:${lineaProductivaId}:${loteId}:${puntoControlId}`;
 }
+
+/**
+ * Key del borrador del alta MANUAL de lote (`/calidad/lotes/nuevo`). No puede
+ * usar `claveProgresoMuestras`: ese formulario existe justamente para crear el
+ * lote, así que no hay `loteId` todavía, ni línea ni punto de control.
+ *
+ * Es una key fija: hay un solo borrador de alta de lote a la vez por pestaña.
+ */
+export const CLAVE_BORRADOR_ALTA_LOTE = "calidad:alta-lote:borrador";

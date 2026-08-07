@@ -2,6 +2,8 @@
 import { hoyPlanta, horaPlanta } from "@/lib/calidad/fecha-planta";
 
 import { useMemo, useState } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
 import { useSession } from "next-auth/react";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
 import { RegistrosDelDia, useRegistrosDelDia } from "@/components/calidad/RegistrosDelDia";
@@ -35,10 +37,32 @@ function labelInsumo(valor: string): string {
 export function TrazabilidadInsumosForm({ puntoControlId, lineaProductivaId, productoActivo }: Props) {
   const { data: session } = useSession();
   const [refreshKey, setRefreshKey] = useState(0);
-  const { enviando, error, exito, guardar } = useBatchGuardar("/calidad/puntos-control", () => setRefreshKey((k) => k + 1));
-  const { registros: registrosHoy, cargando: cargandoHoy, esDemo } = useRegistrosDelDia(puntoControlId, lineaProductivaId, refreshKey);
 
   const loteId = productoActivo.loteId;
+
+  // Borrador persistido de lo capturado. Se declara ANTES de useBatchGuardar
+  // para poder pasarle `limpiarBorrador` como callback de éxito: si no se
+  // limpiara, el próximo cambio de lote de insumo arrancaría con el anterior ya
+  // cargado y el operario podría confirmarlo sin notarlo.
+  const [borrador, setBorrador, limpiarBorrador] = usePersistedState<{
+    insumo: InsumoValor | "";
+    loteInsumo: string;
+    observaciones: string;
+  }>(claveProgresoMuestras({ lineaProductivaId, loteId, puntoControlId }), {
+    insumo: "",
+    loteInsumo: "",
+    observaciones: "",
+  });
+  const { insumo, loteInsumo, observaciones } = borrador;
+  const setInsumo = (v: InsumoValor | "") => setBorrador((b) => ({ ...b, insumo: v }));
+  const setLoteInsumo = (v: string) => setBorrador((b) => ({ ...b, loteInsumo: v }));
+  const setObservaciones = (v: string) => setBorrador((b) => ({ ...b, observaciones: v }));
+
+  const { enviando, error, exito, guardar } = useBatchGuardar("/calidad/puntos-control", () => {
+    limpiarBorrador();
+    setRefreshKey((k) => k + 1);
+  });
+  const { registros: registrosHoy, cargando: cargandoHoy, esDemo } = useRegistrosDelDia(puntoControlId, lineaProductivaId, refreshKey);
   // Filtrado por familia del producto activo — evita registrar (y dejar como
   // falso rastro ante un recall) insumos que no corresponden al proceso en
   // curso. Fallback a la lista completa si la familia no matchea ninguna regla
@@ -49,11 +73,8 @@ export function TrazabilidadInsumosForm({ puntoControlId, lineaProductivaId, pro
     return filtrados.length > 0 ? filtrados : INSUMOS_TODOS;
   }, [productoActivo.familiaSlug]);
 
-  const [insumo, setInsumo] = useState<InsumoValor | "">("");
-  const [loteInsumo, setLoteInsumo] = useState("");
   const [hora, setHora] = useState(horaPlanta());
   const [horaEditada, setHoraEditada] = useState(false);
-  const [observaciones, setObservaciones] = useState("");
   const [validar, setValidar] = useState(false);
 
   // Último lote registrado hoy por tipo de insumo = "en uso ahora"

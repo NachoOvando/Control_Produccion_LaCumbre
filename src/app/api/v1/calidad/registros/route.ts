@@ -33,8 +33,14 @@ export async function POST(req: NextRequest) {
   if (!result.ok) {
     // C6 (AUDIT_PLAN.md Lote 2): conflicto de correlativo es un 409, no un 400
     // genérico de validación — le da al cliente una pista real para reintentar.
-    const status = result.code === "CONFLICTO_CORRELATIVO" ? 409 : 400;
-    return NextResponse.json({ error: result.error, code: result.code, details: result.details }, { status });
+    // Igual el identificador de captura ajeno: el payload es estructuralmente
+    // válido, lo que choca es el estado del recurso.
+    const esConflicto =
+      result.code === "CONFLICTO_CORRELATIVO" || result.code === "CLIENT_REQUEST_ID_AJENO";
+    return NextResponse.json(
+      { error: result.error, code: result.code, details: result.details },
+      { status: esConflicto ? 409 : 400 }
+    );
   }
 
   return NextResponse.json({ data: result.data }, { status: 201 });

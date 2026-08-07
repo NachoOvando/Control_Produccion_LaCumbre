@@ -1,7 +1,9 @@
 "use client";
 import { hoyPlanta, horaPlanta } from "@/lib/calidad/fecha-planta";
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useRef } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
 import { useSession } from "next-auth/react";
 import { NumpadIndustrial } from "@/components/calidad/NumpadIndustrial";
 import { useBatchGuardar } from "@/hooks/useBatchGuardar";
@@ -45,7 +47,16 @@ const CAMPO_PESO_ALFAJOR: { key: CampoNumerico; label: string; unidad?: string }
 export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, productoActivo }: Props) {
   const { data: session } = useSession();
   const [refreshKey, setRefreshKey] = useState(0);
-  const { enviando, error, exito, guardar } = useBatchGuardar(`/calidad/puntos-control?linea=${lineaProductivaId}`, () => setRefreshKey((k) => k + 1));
+  // `limpiarEntradas` se asigna más abajo (depende de `cajasEstandar`), pero el
+  // callback de éxito se registra acá — se lee por referencia al ejecutarse.
+  const limpiarRef = useRef<() => void>(() => {});
+  const { enviando, error, exito, guardar } = useBatchGuardar(
+    `/calidad/puntos-control?linea=${lineaProductivaId}`,
+    () => {
+      limpiarRef.current();
+      setRefreshKey((k) => k + 1);
+    }
+  );
   const { registros: registrosHoy, cargando: cargandoHoy, esDemo } = useRegistrosDelDia(puntoControlId, lineaProductivaId, refreshKey);
 
   const loteId = productoActivo.loteId;
@@ -60,7 +71,15 @@ export function ProduccionDiariaForm({ puntoControlId, lineaProductivaId, produc
   // bloqueado en ese valor y solo se edita marcando el pallet como incompleto
   // (regla auditada por scm-alimentos — divergencia = declaración explícita).
   const cajasEstandar = productoActivo.cajasPorPallet != null ? String(productoActivo.cajasPorPallet) : null;
-  const [entradas, setEntradas] = useState<Entrada[]>([crearEntrada(cajasEstandar ?? "")]);
+  // Las entradas de pallets se persisten: era la pérdida más grande de los
+  // formularios sin borrador — un reload borraba la carga de todos los pallets
+  // del turno, que es exactamente lo que el operario ya no puede reconstruir de
+  // memoria. El resto del estado (hora, tiempo de túnel) se retipea en segundos.
+  const [entradas, setEntradas, limpiarEntradas] = usePersistedState<Entrada[]>(
+    claveProgresoMuestras({ lineaProductivaId, loteId, puntoControlId }),
+    () => [crearEntrada(cajasEstandar ?? "")]
+  );
+  limpiarRef.current = limpiarEntradas;
   const [campoActivo, setCampoActivo] = useState<CampoActivo>(null);
   const [validar, setValidar] = useState(false);
   const [hora, setHora] = useState(horaPlanta());

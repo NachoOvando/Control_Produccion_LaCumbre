@@ -130,6 +130,102 @@ export function esColisionRegistroUnico(e: unknown): boolean {
   );
 }
 
+// Resultado de un guardado en batch. `yaExistian` > 0 significa que llegó un
+// reintento de un evento de captura ya persistido: no es un error, es la
+// idempotencia funcionando. El endpoint responde 200 y el operario ve el
+// guardado como exitoso (que es la verdad: el dato está en la base).
+export type BatchResultado = { creados: number; yaExistian: number };
+
+// Colisión contra el índice único de `client_request_id` — carrera entre dos
+// reintentos concurrentes del MISMO evento de captura (el operario toca Guardar
+// dos veces con la red intermitente, y los dos requests llegan a la vez). Los
+// dos pasaron el chequeo previo de existencia, uno commitea y el otro rebota
+// acá. Es un conflicto benigno: el registro quedó guardado una sola vez, que es
+// exactamente lo que se quería. No es un ERROR_INTERNO.
+export function esColisionClientRequestId(e: unknown): boolean {
+  const columnas = columnasDeColision(e);
+  if (columnas === null) return false;
+  return (
+    columnas.includes("client_request_id") ||
+    (columnas.length === 1 && columnas[0] === "registros_calidad_client_request_id_key")
+  );
+}
+
+// El cliente mandó un `clientRequestId` que YA existe en la base, pero
+// perteneciente a otro registro (distinto punto de control, lote o línea).
+// No es un reintento: es una clave ajena o un bug del cliente. Se distingue
+// del caso legítimo para no devolver datos de un registro que no es el que el
+// llamador cree estar guardando (ver nota de seguridad en el service).
+export class ClientRequestIdAjenoError extends Error {
+  constructor() {
+    super("clientRequestId ya existe y no corresponde al registro enviado");
+    this.name = "ClientRequestIdAjenoError";
+  }
+}
+
+// ¿El registro ya persistido corresponde al mismo evento que el input?
+// Se compara la terna que identifica el contexto de captura. NO se comparan
+// `fecha`/`hora`/`data`: un reintento legítimo puede recalcular la hora en el
+// cliente antes de reenviar, y ese es justamente el caso que hay que reconocer.
+function mismoContextoDeCaptura(
+  existente: { puntoControlId: string; loteId: string; lineaProductivaId: string },
+  input: RegistroCalidadInput
+): boolean {
+  return (
+    existente.puntoControlId === input.puntoControlId &&
+    existente.loteId === input.loteId &&
+    existente.lineaProductivaId === input.lineaProductivaId
+  );
+}
+
+// Busca los registros ya persistidos para los `clientRequestId` del batch y
+// valida que cada uno corresponda al contexto de captura enviado.
+//
+// Corre DENTRO de la transacción y ANTES de cualquier incremento de secuencia:
+// si se incrementara primero, un reintento consumiría correlativos y dejaría
+// HUECOS en la numeración diaria. Un hueco en el correlativo es una pregunta de
+// auditor que no tiene buena respuesta.
+//
+// Incluye registros soft-borrados a propósito (sin filtro `deletedAt: null`):
+// un evento de captura es único para siempre, y recrear lo que un supervisor
+// borró sería revertir su decisión en silencio.
+async function buscarRegistrosYaPersistidos(
+  tx: Prisma.TransactionClient,
+  inputs: RegistroCalidadInput[]
+): Promise<Map<string, { id: string; puntoControlId: string; loteId: string; lineaProductivaId: string }>> {
+  const claves = inputs
+    .map((i) => i.clientRequestId)
+    .filter((c): c is string => typeof c === "string" && c.length > 0);
+
+  if (claves.length === 0) return new Map();
+
+  const existentes = await tx.registroCalidad.findMany({
+    where: { clientRequestId: { in: claves } },
+    select: {
+      id: true,
+      clientRequestId: true,
+      puntoControlId: true,
+      loteId: true,
+      lineaProductivaId: true,
+    },
+  });
+
+  const porClave = new Map<string, { id: string; puntoControlId: string; loteId: string; lineaProductivaId: string }>();
+  for (const e of existentes) {
+    if (e.clientRequestId) porClave.set(e.clientRequestId, e);
+  }
+
+  for (const input of inputs) {
+    if (!input.clientRequestId) continue;
+    const existente = porClave.get(input.clientRequestId);
+    if (existente && !mismoContextoDeCaptura(existente, input)) {
+      throw new ClientRequestIdAjenoError();
+    }
+  }
+
+  return porClave;
+}
+
 // Asigna de forma atómica el próximo valor de una secuencia diaria
 // (pallet_numero/nroMuestra, ver ADR-006 en docs/architecture.md). `tipo` es el
 // puntoControlId: dos puntos de control en la misma línea tienen secuencias
@@ -424,8 +520,30 @@ function dataConCorrelativoSincronizado(data: Record<string, unknown>, nroMuestr
   return { ...data, pallet_numero: nroMuestra };
 }
 
+const INCLUDE_REGISTRO_COMPLETO = {
+  puntoControl: true,
+  lote: { include: { producto: true } },
+  lineaProductiva: true,
+  responsable: { select: { id: true, nombre: true } },
+  turno: { select: { id: true, nombre: true } },
+} as const;
+
 export async function createRegistroCalidad(input: RegistroCalidadInput) {
   return prisma.$transaction(async (tx) => {
+    // Mismo orden que en el batch: dedupe primero, secuencia después.
+    const yaPersistidos = await buscarRegistrosYaPersistidos(tx, [input]);
+    if (input.clientRequestId) {
+      const existente = yaPersistidos.get(input.clientRequestId);
+      if (existente) {
+        // Reintento de un evento ya guardado: se devuelve el registro que ya
+        // está en la base, sin consumir correlativo ni escribir nada.
+        return tx.registroCalidad.findUniqueOrThrow({
+          where: { id: existente.id },
+          include: INCLUDE_REGISTRO_COMPLETO,
+        });
+      }
+    }
+
     const nroMuestra = await siguienteValorSecuencia(tx, {
       lineaProductivaId: input.lineaProductivaId,
       fecha: input.fecha,
@@ -445,16 +563,11 @@ export async function createRegistroCalidad(input: RegistroCalidadInput) {
         nroMuestra,
         filaProd: input.filaProd ?? null,
         notas: input.notas ?? null,
+        clientRequestId: input.clientRequestId ?? null,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         data: dataConCorrelativoSincronizado(input.data, nroMuestra) as any,
       },
-      include: {
-        puntoControl: true,
-        lote: { include: { producto: true } },
-        lineaProductiva: true,
-        responsable: { select: { id: true, nombre: true } },
-        turno: { select: { id: true, nombre: true } },
-      },
+      include: INCLUDE_REGISTRO_COMPLETO,
     });
   });
 }
@@ -473,8 +586,24 @@ export async function createRegistroCalidad(input: RegistroCalidadInput) {
 // el orden de aparición del grupo en el batch. Esto además resuelve B1: como
 // la secuencia persiste entre requests, un segundo guardado el mismo día
 // continúa desde donde quedó la anterior — no puede colisionar.
-export async function createRegistrosBatchDB(inputs: RegistroCalidadInput[]) {
+export async function createRegistrosBatchDB(inputs: RegistroCalidadInput[]): Promise<BatchResultado> {
   return prisma.$transaction(async (tx) => {
+    // PRIMERO el dedupe, ANTES de tocar la secuencia (ver
+    // buscarRegistrosYaPersistidos: incrementar antes de filtrar deja huecos
+    // en la numeración diaria).
+    const yaPersistidos = await buscarRegistrosYaPersistidos(tx, inputs);
+
+    const pendientes = inputs.filter(
+      (i) => !i.clientRequestId || !yaPersistidos.has(i.clientRequestId)
+    );
+    const yaExistian = inputs.length - pendientes.length;
+
+    // Reintento completo de un batch ya guardado: no se escribe nada y no se
+    // consume ningún correlativo.
+    if (pendientes.length === 0) {
+      return { creados: 0, yaExistian };
+    }
+
     const claveDe = (i: RegistroCalidadInput) =>
       `${i.lineaProductivaId}|${i.puntoControlId}|${i.fecha}|${i.nroMuestra}`;
 
@@ -482,7 +611,7 @@ export async function createRegistrosBatchDB(inputs: RegistroCalidadInput[]) {
     // de un Map de JS preserva el orden de inserción, así que el primer grupo
     // en aparecer recibe el número más bajo.
     const gruposVistos = new Map<string, { lineaProductivaId: string; fecha: string; puntoControlId: string }>();
-    for (const input of inputs) {
+    for (const input of pendientes) {
       const clave = claveDe(input);
       if (!gruposVistos.has(clave)) {
         gruposVistos.set(clave, {
@@ -504,7 +633,7 @@ export async function createRegistrosBatchDB(inputs: RegistroCalidadInput[]) {
     }
 
     const ops: Prisma.PrismaPromise<unknown>[] = [];
-    for (const input of inputs) {
+    for (const input of pendientes) {
       const registroId = crypto.randomUUID();
       const nroMuestra = nroMuestraAsignado.get(claveDe(input))!;
       const data = {
@@ -519,6 +648,7 @@ export async function createRegistrosBatchDB(inputs: RegistroCalidadInput[]) {
         nroMuestra,
         filaProd: input.filaProd ?? null,
         notas: input.notas ?? null,
+        clientRequestId: input.clientRequestId ?? null,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         data: dataConCorrelativoSincronizado(input.data, nroMuestra) as any,
       };
@@ -538,7 +668,11 @@ export async function createRegistrosBatchDB(inputs: RegistroCalidadInput[]) {
       );
     }
 
-    return Promise.all(ops);
+    await Promise.all(ops);
+    // `ops` tiene 2 entradas por registro (el registro + su auditoría), así que
+    // su longitud NO es la cantidad de registros creados. Antes se devolvía
+    // `created.length` y el endpoint reportaba el doble.
+    return { creados: pendientes.length, yaExistian };
   });
 }
 

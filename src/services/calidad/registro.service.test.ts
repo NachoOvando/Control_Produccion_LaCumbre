@@ -16,6 +16,10 @@ vi.mock("@/db/calidad.repository", () => ({
   createRegistrosBatchDB: vi.fn(),
   getTurnoByHora: vi.fn(async () => null),
   esColisionRegistroUnico: vi.fn(),
+  esColisionClientRequestId: vi.fn(() => false),
+  // Clase real, no un stub: el service la usa con `instanceof`, así que un
+  // vi.fn() haría que ese branch nunca se tome y el test pasaría sin probar nada.
+  ClientRequestIdAjenoError: class ClientRequestIdAjenoError extends Error {},
 }));
 
 import { prisma } from "@/lib/prisma";
@@ -23,6 +27,8 @@ import {
   createRegistroCalidad,
   createRegistrosBatchDB,
   esColisionRegistroUnico,
+  esColisionClientRequestId,
+  ClientRequestIdAjenoError,
 } from "@/db/calidad.repository";
 import { createRegistroService, createRegistrosBatchService } from "./registro.service";
 import { schemaRoturaEncajado } from "@/lib/calidad/schemas/rotura-encajado.schema";
@@ -34,6 +40,7 @@ const lineaMock = vi.mocked(prisma.lineaProductiva.findUnique);
 const createRegistroMock = vi.mocked(createRegistroCalidad);
 const createBatchMock = vi.mocked(createRegistrosBatchDB);
 const esColisionMock = vi.mocked(esColisionRegistroUnico);
+const esColisionClientRequestIdMock = vi.mocked(esColisionClientRequestId);
 
 const PC_ID = "11111111-1111-4111-8111-111111111111";
 const LOTE_ID = "22222222-2222-4222-8222-222222222222";

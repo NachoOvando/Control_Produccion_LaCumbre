@@ -3,6 +3,9 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { hoyPlanta } from "@/lib/calidad/fecha-planta";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { CLAVE_BORRADOR_ALTA_LOTE } from "@/lib/calidad/persistencia-key";
+import { postConReintento } from "@/lib/calidad/envio-red";
 
 type ProductoOption = {
   id: string;
@@ -15,9 +18,15 @@ type Props = { productos: ProductoOption[] };
 
 export function AltaLoteForm({ productos }: Props) {
   const router = useRouter();
-  const [productoId, setProductoId] = useState("");
-  const [fechaProduccion, setFechaProduccion] = useState(hoyPlanta());
-  const [notas, setNotas] = useState("");
+  const [borrador, setBorrador, limpiarBorrador] = usePersistedState<{
+    productoId: string;
+    fechaProduccion: string;
+    notas: string;
+  }>(CLAVE_BORRADOR_ALTA_LOTE, () => ({ productoId: "", fechaProduccion: hoyPlanta(), notas: "" }));
+  const { productoId, fechaProduccion, notas } = borrador;
+  const setProductoId = (v: string) => setBorrador((b) => ({ ...b, productoId: v }));
+  const setFechaProduccion = (v: string) => setBorrador((b) => ({ ...b, fechaProduccion: v }));
+  const setNotas = (v: string) => setBorrador((b) => ({ ...b, notas: v }));
 
   // Agrupar por familia reduce el escaneo lineal de 104 opciones planas
   const productosPorFamilia = useMemo(() => {
@@ -39,20 +48,33 @@ export function AltaLoteForm({ productos }: Props) {
     setEnviando(true);
     setError(null);
     try {
-      const res = await fetch("/api/v1/calidad/lotes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productoId, fechaProduccion, notas: notas.trim() || undefined }),
-      });
-      const json = await res.json();
+      // Timeout y cancelación, pero SIN reintento automático: el alta de lote no
+      // es idempotente (el numeroLote generado incluye hhmmss, así que dos POST
+      // separados por un segundo crean dos lotes distintos). Reintentar solo
+      // porque no volvió la respuesta crearía lotes fantasma. Que el operario
+      // decida, con el estado del formulario intacto.
+      const res = await postConReintento(
+        "/api/v1/calidad/lotes",
+        { productoId, fechaProduccion, notas: notas.trim() || undefined },
+        { maxIntentos: 1 }
+      );
+
       if (!res.ok) {
-        setError(json.error ?? "Error al crear el lote.");
+        if (res.motivo === "red") {
+          setError(
+            "Sin conexión con el servidor. Antes de reintentar, verificá en la lista si el lote llegó a crearse."
+          );
+        } else {
+          const json = res.json as { error?: string } | null;
+          setError(json?.error ?? "Error al crear el lote.");
+        }
         return;
       }
+
+      const json = res.json as { data: { numeroLote: string } };
+      limpiarBorrador();
       setLoteCreado({ numeroLote: json.data.numeroLote });
       setTimeout(() => router.push("/calidad/puntos-control"), 2000);
-    } catch {
-      setError("Error de conexión. Verificá la red e intentá de nuevo.");
     } finally {
       setEnviando(false);
     }

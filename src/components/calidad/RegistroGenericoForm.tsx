@@ -1,7 +1,11 @@
 "use client";
 import { hoyPlanta, horaPlanta } from "@/lib/calidad/fecha-planta";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { usePersistedState } from "@/hooks/usePersistedState";
+import { claveProgresoMuestras } from "@/lib/calidad/persistencia-key";
+import { clavesDeCaptura, type ClavesDeCaptura, type RegistroParaHuella } from "@/lib/calidad/idempotencia";
+import { postConReintento } from "@/lib/calidad/envio-red";
 import { useRouter } from "next/navigation";
 import { ProductoActivoBanner } from "@/components/calidad/ProductoActivoBanner";
 import type { ProductoActivoLinea } from "@/types/calidad";
@@ -41,11 +45,25 @@ export function RegistroGenericoForm({ puntoControlId, puntoControlNombre, linea
 
   const loteId = productoActivo.loteId;
   const [hora, setHora] = useState(horaPlanta());
-  const [notas, setNotas] = useState("");
-  const [data, setData] = useState<Record<string, string | boolean>>({});
+  // `data` y `notas` son lo capturado: se persisten para que un reload no las
+  // borre. `hora` se retipea en segundos y no vale ensuciar la key con ella.
+  const [borrador, setBorrador, limpiarBorrador] = usePersistedState<{
+    data: Record<string, string | boolean>;
+    notas: string;
+  }>(claveProgresoMuestras({ lineaProductivaId, loteId, puntoControlId }), { data: {}, notas: "" });
+  const { data, notas } = borrador;
+  const setData = (
+    actualizar: (prev: Record<string, string | boolean>) => Record<string, string | boolean>
+  ) => setBorrador((b) => ({ ...b, data: actualizar(b.data) }));
+  const setNotas = (v: string) => setBorrador((b) => ({ ...b, notas: v }));
+
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exito, setExito] = useState(false);
+  // Clave de idempotencia. Este formulario no usa useBatchGuardar (tiene su
+  // propio fetch al endpoint individual), así que era el único camino de
+  // escritura que quedaba sin protección contra el duplicado por reintento.
+  const clavesRef = useRef<ClavesDeCaptura | null>(null);
 
   const guardar = async () => {
     setEnviando(true);
@@ -68,35 +86,49 @@ export function RegistroGenericoForm({ puntoControlId, puntoControlNombre, linea
       }
     }
 
-    const payload = {
+    const fecha = hoyPlanta();
+    const base = {
       puntoControlId,
       loteId,
       lineaProductivaId,
-      responsableId: "00000000-0000-0000-0000-000000000000",
-      fecha: hoyPlanta(),
-      hora: hora + ":00",
-      nroMuestra: 1,
+      fecha,
       notas: notas || undefined,
       data: dataConvertida,
     };
 
-    try {
-      const res = await fetch("/api/v1/calidad/registros", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const json = await res.json();
+    // Misma clave si el contenido no cambió → el reintento se reconoce como el
+    // mismo evento de captura. Si el operario corrigió un valor, se regenera.
+    const claves = clavesDeCaptura([base as RegistroParaHuella], clavesRef.current);
+    clavesRef.current = claves;
 
-      if (json.error) {
-        setError(json.error + (json.details ? `: ${JSON.stringify(json.details)}` : ""));
+    const payload = {
+      ...base,
+      responsableId: "00000000-0000-0000-0000-000000000000",
+      hora: hora + ":00",
+      nroMuestra: 1,
+      clientRequestId: claves.claves[0],
+    };
+
+    try {
+      const res = await postConReintento("/api/v1/calidad/registros", payload);
+
+      if (!res.ok) {
+        if (res.motivo === "red") {
+          setError("Sin conexión con el servidor. Reintentá — si ya se guardó, no se va a duplicar.");
+        } else {
+          const json = res.json as { error?: string; details?: unknown } | null;
+          setError(
+            (json?.error ?? "Error al guardar el registro.") +
+              (json?.details ? `: ${JSON.stringify(json.details)}` : "")
+          );
+        }
         return;
       }
 
+      clavesRef.current = null;
+      limpiarBorrador();
       setExito(true);
       setTimeout(() => router.push("/calidad"), 2000);
-    } catch {
-      setError("Error de conexión. Intentá nuevamente.");
     } finally {
       setEnviando(false);
     }

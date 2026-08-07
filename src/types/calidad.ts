@@ -31,6 +31,11 @@ export type RegistroCalidadInput = {
   nroMuestra: number;
   filaProd?: number;
   notas?: string;
+  // UUID v4 generado en el dispositivo al momento de la captura, estable entre
+  // reintentos. Clave de idempotencia del guardado — ver el comentario de
+  // `clientRequestId` en prisma/schema.prisma. Opcional: los caminos internos
+  // (seed, importaciones) no lo mandan y quedan con el comportamiento previo.
+  clientRequestId?: string;
   data: Record<string, unknown>;
 };
 

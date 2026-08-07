@@ -488,6 +488,22 @@ model RegistroCalidad {
   notas             String?
   data              Json
   createdAt         DateTime     @default(now()) @map("created_at")
+  // Identidad del EVENTO de captura, generada en el dispositivo (UUID v4) antes
+  // de enviar. Es la clave de idempotencia del guardado: si el batch commitea y
+  // la respuesta se pierde por un corte de red, el reintento del operario trae
+  // el mismo valor y el servidor lo reconoce en vez de crear un segundo juego
+  // de registros con correlativo consecutivo (que `registro_unico` NO atrapa,
+  // porque el correlativo lo asigna el servidor).
+  //
+  // UNIQUE simple, NO parcial por `deleted_at`: un evento de captura es único
+  // para siempre. Si un supervisor soft-borró el registro, un reintento del
+  // mismo evento no debe recrearlo — sería revertir su decisión en silencio.
+  //
+  // Nullable a propósito: los registros históricos no lo tienen, y las
+  // escrituras internas (seed, importaciones) no pasan por el camino del
+  // dispositivo. Sin valor no hay protección de idempotencia, que es
+  // exactamente el comportamiento previo.
+  clientRequestId   String?      @unique @map("client_request_id") @db.Uuid
   // Soft-delete: nunca se elimina físicamente un registro de calidad (HACCP)
   deletedAt         DateTime?    @map("deleted_at")
   deletedById       String?      @map("deleted_by_id") @db.Uuid

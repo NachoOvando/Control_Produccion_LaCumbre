@@ -13,6 +13,17 @@ import bcrypt from "bcryptjs";
 // el payload literal de cada formulario (ver src/lib/calidad/schemas/schemas.test.ts).
 import { schemaRoturaEncajado } from "../src/lib/calidad/schemas/rotura-encajado.schema";
 import { schemaPesoAlfajorOpp } from "../src/lib/calidad/schemas/peso-opp.schema";
+import {
+  schemaPesoAlfajor,
+  schemaPesoRelleno,
+  schemaPesoBano,
+  schemaPesoTapas,
+  schemaTemperaturaTunelCondensacion,
+  schemaTemperaturaTanques,
+  schemaProduccionDiaria,
+  schemaDefectosConformado,
+} from "../src/lib/calidad/schemas/puntos-control.schema";
+import { BINDINGS } from "../src/lib/calidad/schemas/bindings";
 
 // Next.js carga .env.local automáticamente; fuera de Next hay que hacerlo a mano
 dotenvConfig({ path: ".env.local" });
@@ -28,338 +39,6 @@ const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString }) })
 // El campo `data` de RegistroCalidad se valida contra estos schemas via AJV
 // =============================================================================
 
-const schemaPesoAlfajor = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  title: "Control de Peso de Alfajor",
-  description: "12 mediciones de peso de alfajor sin baño o con baño",
-  type: "object",
-  required: ["tipo", "mediciones"],
-  additionalProperties: false,
-  properties: {
-    tipo: {
-      type: "string",
-      enum: ["sin_bano", "con_bano"],
-      description: "Tipo de alfajor medido",
-    },
-    mediciones: {
-      type: "array",
-      minItems: 12,
-      maxItems: 12,
-      items: {
-        type: "number",
-        minimum: 30,
-        maximum: 150,
-        multipleOf: 0.1,
-      },
-      description: "12 mediciones de peso en gramos",
-    },
-    peso_tapa: {
-      type: "number",
-      minimum: 0,
-      maximum: 50,
-      multipleOf: 0.1,
-      description: "Peso de la tapa en gramos (opcional)",
-    },
-  },
-};
-
-const schemaPesoRelleno = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  title: "Control de Peso de Relleno",
-  description: "12 mediciones de peso de relleno. Aplica a DDL, Bon o Bon u otro.",
-  type: "object",
-  required: ["tipo_relleno", "mediciones"],
-  additionalProperties: false,
-  properties: {
-    tipo_relleno: {
-      type: "string",
-      enum: ["dulce_de_leche", "bonobon", "ddl_bob", "otros"],
-      description: "Tipo de relleno controlado",
-    },
-    tipo_relleno_otro: {
-      type: "string",
-      maxLength: 100,
-      description: "Aclaración cuando tipo_relleno = otros",
-    },
-    mediciones: {
-      type: "array",
-      minItems: 12,
-      maxItems: 12,
-      items: {
-        type: "number",
-        minimum: 0,
-        maximum: 150,
-        multipleOf: 0.1,
-      },
-      description: "12 mediciones de peso de relleno en gramos",
-    },
-    peso_tapa: {
-      type: "number",
-      minimum: 0,
-      maximum: 50,
-      multipleOf: 0.1,
-    },
-    presencia_bob: {
-      type: "boolean",
-      description: "Presencia de BOB (Bon o Bon) — C/NC",
-    },
-    penetrometria: {
-      type: "number",
-      minimum: 0,
-      maximum: 500,
-      description: "Valor penetrométrico (opcional)",
-    },
-  },
-};
-
-const schemaPesoBano = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  title: "Control de Peso de Baño",
-  description: "12 mediciones P1-P12. Registra T° ambiente y T° baño. Escurrimiento opcional (no se mide en cada muestra en la práctica de planta).",
-  type: "object",
-  required: ["tipo_producto", "mediciones", "temp_ambiente", "temp_bano"],
-  additionalProperties: false,
-  properties: {
-    tipo_producto: {
-      type: "string",
-      // "Solo baño" no se mide: el peso del baño es la resta c/baño - s/baño (muestras apareadas)
-      enum: ["sandwich_sin_bano", "sandwich_con_bano"],
-      description: "Tipo de producto bañado",
-    },
-    mediciones: {
-      type: "array",
-      minItems: 12,
-      maxItems: 12,
-      items: {
-        type: "number",
-        minimum: 0,
-        maximum: 200,
-        multipleOf: 0.1,
-      },
-      description: "12 mediciones de peso P1-P12 en gramos",
-    },
-    peso_tapa: {
-      type: "number",
-      minimum: 0,
-      maximum: 50,
-      multipleOf: 0.1,
-    },
-    temp_ambiente: {
-      type: "number",
-      minimum: 0,
-      maximum: 50,
-      multipleOf: 0.1,
-      description: "Temperatura ambiente en °C",
-    },
-    temp_bano: {
-      type: "number",
-      minimum: 20,
-      maximum: 60,
-      multipleOf: 0.1,
-      description: "Temperatura del baño de repostería en °C",
-    },
-    escurrimiento: {
-      type: "number",
-      minimum: 0,
-      maximum: 100,
-      multipleOf: 0.1,
-      description: "Escurrimiento en gramos",
-    },
-  },
-};
-
-// Control Peso Tapas — PC propio y distinto de "Control Peso Baño Alfajor"
-// (ver ADR-015, corrección 2026-07-21: el schema anterior compartido no
-// aceptaba este payload y el guardado fallaba siempre — 0 registros
-// guardados jamás). Cada observación (pico dosificador 1-12) pesa la MISMA
-// tapa dos veces: sin bañar y con baño. La cobertura de chocolate se calcula
-// en el cliente por resta apareada (con_baño[i] - sin_bañar[i]) y se envía
-// ya calculada — NO hay una tercera medición manual de "baño suelto"
-// (confirmado con el usuario: esa fila del diseño anterior no correspondía).
-const schemaPesoTapas = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  title: "Control de Peso de Tapas",
-  description: "12 observaciones (1 por pico dosificador). Cada una pesa la tapa sin bañar y con baño; la cobertura surge de la resta. T° ambiente y T° baño obligatorios, escurrimiento opcional.",
-  type: "object",
-  required: ["mediciones_tapa", "mediciones_tapa_con_bano", "mediciones_cobertura", "temp_ambiente", "temp_bano"],
-  additionalProperties: false,
-  properties: {
-    mediciones_tapa: {
-      type: "array",
-      minItems: 12,
-      maxItems: 12,
-      items: { type: "number", minimum: 0, maximum: 50, multipleOf: 0.1 },
-      description: "12 pesos de tapa SIN bañar en gramos, uno por pico dosificador",
-    },
-    mediciones_tapa_con_bano: {
-      type: "array",
-      minItems: 12,
-      maxItems: 12,
-      items: { type: "number", minimum: 0, maximum: 60, multipleOf: 0.1 },
-      description: "12 pesos de tapa CON baño en gramos, mismo pico y orden que mediciones_tapa",
-    },
-    mediciones_cobertura: {
-      type: "array",
-      minItems: 12,
-      maxItems: 12,
-      // Rango amplio (incluye negativos): esto es una cota de plausibilidad
-      // física, no el rango de calidad — el objetivo de calidad vive en
-      // EspecificacionProducto (ADR-014/015), no acá (ver ADR-001).
-      items: { type: "number", minimum: -10, maximum: 30, multipleOf: 0.01 },
-      description: "12 diferencias (con_baño - sin_bañar) en gramos, calculadas en el cliente",
-    },
-    temp_ambiente: {
-      type: "number",
-      minimum: 0,
-      maximum: 50,
-      multipleOf: 0.1,
-      description: "Temperatura ambiente en °C",
-    },
-    temp_bano: {
-      type: "number",
-      minimum: 20,
-      maximum: 60,
-      multipleOf: 0.1,
-      description: "Temperatura del baño de repostería en °C",
-    },
-    escurrimiento: {
-      type: "number",
-      minimum: 0,
-      maximum: 100,
-      multipleOf: 0.1,
-      description: "Escurrimiento en gramos (opcional)",
-    },
-  },
-};
-
-const schemaTemperaturaTunelCondensacion = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  title: "Control de Temperatura de Condensación — Salida Túnel",
-  description: "Control de temperatura y humedad a la salida del túnel de enfriado. Frecuencia: cada hora.",
-  type: "object",
-  required: [
-    "humedad_relativa",
-    "temp_ambiente",
-    "temp_producto",
-    "temp_rocio",
-    "temp_condensacion",
-    "temp_interna",
-    "peso",
-    "espesor",
-  ],
-  additionalProperties: false,
-  properties: {
-    humedad_relativa: {
-      type: "number",
-      minimum: 0,
-      maximum: 100,
-      multipleOf: 0.1,
-      description: "Humedad relativa del ambiente en %",
-    },
-    temp_ambiente: {
-      type: "number",
-      minimum: -10,
-      maximum: 50,
-      multipleOf: 0.1,
-      description: "Temperatura ambiente en °C",
-    },
-    temp_producto: {
-      type: "number",
-      minimum: -30,
-      maximum: 40,
-      multipleOf: 0.1,
-      description: "Temperatura del producto a la salida del túnel en °C",
-    },
-    temp_rocio: {
-      type: "number",
-      minimum: -30,
-      maximum: 40,
-      multipleOf: 0.1,
-      description: "Punto de rocío Td en °C",
-    },
-    temp_condensacion: {
-      type: "number",
-      minimum: -30,
-      maximum: 40,
-      multipleOf: 0.1,
-      description: "Temperatura de condensación en °C",
-    },
-    temp_interna: {
-      type: "number",
-      minimum: -30,
-      maximum: 40,
-      multipleOf: 0.1,
-      description: "Temperatura interna del producto en °C",
-    },
-    peso: {
-      type: "number",
-      minimum: 0,
-      maximum: 300,
-      multipleOf: 0.1,
-      description: "Peso del producto en gramos",
-    },
-    espesor: {
-      type: "number",
-      minimum: 0,
-      maximum: 100,
-      multipleOf: 0.1,
-      description: "Espesor del producto en mm",
-    },
-    tiempo_tunel_min: {
-      type: "number",
-      minimum: 0,
-      maximum: 240,
-      description: "Tiempo de túnel en minutos — se registra una vez por jornada",
-    },
-    observaciones: {
-      type: "string",
-      maxLength: 500,
-    },
-  },
-};
-
-const schemaTemperaturaTanques = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  title: "Control de Temperatura de Tanques",
-  description: "Temperatura de los tanques de relleno y cobertura. Controles 3x por día.",
-  type: "object",
-  required: ["temp_ddl"],
-  additionalProperties: false,
-  properties: {
-    temp_ddl: {
-      type: "number",
-      minimum: 10,
-      maximum: 60,
-      multipleOf: 0.1,
-      description: "Temperatura Tanque DDL en °C",
-    },
-    temp_bon_o_bon: {
-      type: "number",
-      minimum: 10,
-      maximum: 60,
-      multipleOf: 0.1,
-      description: "Temperatura Tanque Bon o Bon en °C",
-    },
-    tanque_1_cobertura: {
-      type: "number",
-      minimum: 20,
-      maximum: 60,
-      multipleOf: 0.1,
-      description: "Temperatura Tanque 1 Cobertura en °C",
-    },
-    tanque_2_cobertura: {
-      type: "number",
-      minimum: 20,
-      maximum: 60,
-      multipleOf: 0.1,
-      description: "Temperatura Tanque 2 Cobertura en °C",
-    },
-    observaciones: {
-      type: "string",
-      maxLength: 500,
-    },
-  },
-};
 
 // PCC1 — Punto Crítico de Control. Verificación obligatoria cada hora.
 const schemaDetectorMetales = {
@@ -489,76 +168,6 @@ const schemaFechadoEnvase = {
   },
 };
 
-const schemaProduccionDiaria = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  title: "Control de Producción Diaria",
-  description: "Registro continuo de producción: cajas, pallets, lote producto terminado y peso.",
-  type: "object",
-  required: ["cajas", "lote_pt", "vencimiento_pt"],
-  additionalProperties: false,
-  properties: {
-    cajas: {
-      type: "integer",
-      minimum: 0,
-      maximum: 99999,
-      description: "Cantidad de cajas producidas",
-    },
-    pallet_numero: {
-      type: "integer",
-      minimum: 1,
-      description: "Número de pallet — correlativo automático por día",
-    },
-    pallet_incompleto: {
-      type: "boolean",
-      description: "El pallet quedó incompleto (se registran las cajas cargadas)",
-    },
-    tiempo_tunel_min: {
-      type: "number",
-      minimum: 0,
-      maximum: 240,
-      description: "Tiempo de túnel en minutos — se registra una vez por turno",
-    },
-    lote_pt: {
-      type: "string",
-      maxLength: 100,
-      description: "Lote de producto terminado",
-    },
-    vencimiento_pt: {
-      type: "string",
-      // MM/AAAA (mes + año a 4 dígitos) — es lo que produce calcularVencimiento()
-      // en src/lib/calidad/lote-pt.ts. El patrón DD/MM/AA que había acá era copia
-      // del schema de fechado_envase (otro campo, otro formato) — nunca coincidió
-      // con el valor real que manda el formulario, así que TODO guardado de
-      // Producción Diaria fallaba con 400 desde que existe esta feature (0 filas
-      // en producción, confirmado en DB). Ver hito de bug crítico en LOG_CONTEXTO.md.
-      pattern: "^\\d{2}/\\d{4}$",
-      description: "Fecha de vencimiento del lote PT en formato MM/AAAA",
-    },
-    peso_alfajor: {
-      type: "number",
-      minimum: 30,
-      maximum: 150,
-      multipleOf: 0.1,
-      description: "Peso de alfajor chequeado en ese momento (opcional)",
-    },
-    zona_tunel_1: {
-      type: "number",
-      description: "Temperatura zona 1 del túnel (opcional)",
-    },
-    zona_tunel_2: {
-      type: "number",
-      description: "Temperatura zona 2 del túnel (opcional)",
-    },
-    zona_tunel_3: {
-      type: "number",
-      description: "Temperatura zona 3 del túnel (opcional)",
-    },
-    observaciones: {
-      type: "string",
-      maxLength: 500,
-    },
-  },
-};
 
 // Trazabilidad de insumos — un registro por CAMBIO de lote de insumo (no por turno).
 // Cruza con el correlativo de pallets de Producción Diaria para acotar recalls.
@@ -592,37 +201,6 @@ const schemaTrazabilidadInsumos = {
   },
 };
 
-const schemaDefectosConformado = {
-  $schema: "http://json-schema.org/draft-07/schema#",
-  title: "Defectos de Conformado",
-  description: "Control de defectos visuales y gravimétricos en conformado de alfajores",
-  type: "object",
-  required: ["fistula", "barril", "ventana", "mal_baniado", "peso_neto"],
-  additionalProperties: false,
-  properties: {
-    fistula: {
-      type: "string",
-      enum: ["Sin fístula", "Fístula <1cm", "Fístula >1cm"],
-    },
-    barril: {
-      type: "string",
-      enum: ["Sin barril", "Barril aprobado", "Barril rechazado"],
-    },
-    ventana: {
-      type: "string",
-      enum: ["Sin ventana", "Ventana ≤1cm", "Ventana 1-3cm", "Ventana >5cm"],
-    },
-    mal_baniado: {
-      type: "boolean",
-    },
-    peso_neto: {
-      type: "number",
-      minimum: 60,
-      maximum: 100,
-      multipleOf: 0.1,
-    },
-  },
-};
 
 const schemaInspeccionMasa = {
   $schema: "http://json-schema.org/draft-07/schema#",
@@ -1078,47 +656,39 @@ async function main() {
   // apareadas; los pct_rotura_* son contadores sobre unidades_muestreadas).
   // `derivado` NO implica "se evalúa al cierre": los pct_rotura_* se comparan en
   // vivo contra la spec mientras el operario carga.
-  const bindings: { pc: { id: string }; clave: string; campoData: string; agregacion: "escalar" | "array_cada" | "array_promedio" | "derivado" }[] = [
-    { pc: pcPesoAlfajor, clave: "peso_alfajor", campoData: "mediciones", agregacion: "array_cada" },
-    { pc: pcPesoAlfajor, clave: "peso_tapa", campoData: "peso_tapa", agregacion: "escalar" },
-    { pc: pcPesoRelleno, clave: "peso_relleno", campoData: "mediciones", agregacion: "array_cada" },
-    { pc: pcPesoBano, clave: "peso_bano", campoData: "mediciones", agregacion: "derivado" },
-    { pc: pcPesoBano, clave: "temp_bano", campoData: "temp_bano", agregacion: "escalar" },
-    // Control Peso Tapas: mismos parámetros lógicos peso_tapa/temp_bano que
-    // Alfajor, pero bindeados a los campos y agregación propios de este PC
-    // (ver ADR-015 — un Parametro puede tener un binding por punto de control).
-    { pc: pcPesoTapas, clave: "peso_tapa", campoData: "mediciones_tapa", agregacion: "array_cada" },
-    { pc: pcPesoTapas, clave: "peso_cobertura", campoData: "mediciones_cobertura", agregacion: "array_cada" },
-    { pc: pcPesoTapas, clave: "temp_bano", campoData: "temp_bano", agregacion: "escalar" },
-    { pc: pcTempTunel, clave: "temp_producto", campoData: "temp_producto", agregacion: "escalar" },
-    { pc: pcTempTunel, clave: "temp_condensacion", campoData: "temp_condensacion", agregacion: "escalar" },
-    { pc: pcTempTunel, clave: "humedad_relativa", campoData: "humedad_relativa", agregacion: "escalar" },
-    { pc: pcTempTunel, clave: "temp_interna", campoData: "temp_interna", agregacion: "escalar" },
-    { pc: pcTempTanques, clave: "temp_ddl", campoData: "temp_ddl", agregacion: "escalar" },
-    { pc: pcTempTanques, clave: "temp_bon_o_bon", campoData: "temp_bon_o_bon", agregacion: "escalar" },
-    { pc: pcTempTanques, clave: "temp_cobertura_1", campoData: "tanque_1_cobertura", agregacion: "escalar" },
-    { pc: pcTempTanques, clave: "temp_cobertura_2", campoData: "tanque_2_cobertura", agregacion: "escalar" },
-    { pc: pcProduccionDiaria, clave: "peso_alfajor", campoData: "peso_alfajor", agregacion: "escalar" },
-    { pc: pcDefectosConformado, clave: "peso_neto", campoData: "filas[].peso_neto", agregacion: "array_cada" },
-    // Rotura: campoData es un nombre VIRTUAL (no hay tal clave en `data`).
-    // specDeCampo() hace match de string sobre el array de especificaciones, no
-    // lee `data`, así que el formulario le pasa el porcentaje ya calculado.
-    { pc: pcRoturaEncajado, clave: "pct_rotura_grupo1", campoData: "pct_rotura_grupo1", agregacion: "derivado" },
-    { pc: pcRoturaEncajado, clave: "pct_rotura_grupo2", campoData: "pct_rotura_grupo2", agregacion: "derivado" },
-    { pc: pcRoturaEncajado, clave: "pct_rotura_total", campoData: "pct_rotura_total", agregacion: "derivado" },
-    { pc: pcPesoOpp, clave: "peso_paquete_opp", campoData: "mediciones", agregacion: "array_cada" },
-  ];
+  // La tabla vive en src/lib/calidad/schemas/bindings.ts, no acá: es la MISMA
+  // fuente que valida bindings-coherencia.test.ts. Antes el seed la declaraba y
+  // el test la replicaba a mano, y por esa rendija pasó un binding roto de
+  // `peso_bano` a producción sin que nada lo señalara.
+  const pcPorNombre = new Map<string, { id: string }>([
+    ["Control Peso Alfajor", pcPesoAlfajor],
+    ["Control Peso Relleno", pcPesoRelleno],
+    ["Control Peso Baño Alfajor", pcPesoBano],
+    ["Control Peso Tapas", pcPesoTapas],
+    ["Control Temperatura Condensación Túnel", pcTempTunel],
+    ["Control Temperatura Tanques", pcTempTanques],
+    ["Producción Diaria — Línea 3", pcProduccionDiaria],
+    ["Defectos de Conformado", pcDefectosConformado],
+    ["Control de Rotura en Encajado", pcRoturaEncajado],
+    ["Control Peso Alfajor + OPP", pcPesoOpp],
+  ]);
 
-  for (const b of bindings) {
+  for (const b of BINDINGS) {
     const parametro = paramPorClave.get(b.clave);
-    if (!parametro) continue;
+    const pc = pcPorNombre.get(b.pc);
+    // Falla ruidosa en vez de `continue` silencioso: un nombre de punto de
+    // control mal escrito en la tabla de bindings dejaría el binding sin sembrar
+    // y la especificación correspondiente no se mostraría nunca en captura —
+    // exactamente la clase de falla silenciosa que este refactor viene a cerrar.
+    if (!pc) throw new Error(`Binding con punto de control desconocido: "${b.pc}" (clave ${b.clave})`);
+    if (!parametro) throw new Error(`Binding con parámetro desconocido: "${b.clave}" (pc ${b.pc})`);
     await prisma.puntoControlParametro.upsert({
-      where: { puntoControlId_parametroId: { puntoControlId: b.pc.id, parametroId: parametro.id } },
+      where: { puntoControlId_parametroId: { puntoControlId: pc.id, parametroId: parametro.id } },
       update: { campoData: b.campoData, agregacion: b.agregacion },
-      create: { puntoControlId: b.pc.id, parametroId: parametro.id, campoData: b.campoData, agregacion: b.agregacion },
+      create: { puntoControlId: pc.id, parametroId: parametro.id, campoData: b.campoData, agregacion: b.agregacion },
     });
   }
-  console.log(`✅ Bindings parámetro↔campo (${bindings.length})`);
+  console.log(`✅ Bindings parámetro↔campo (${BINDINGS.length})`);
 
   // Los lotes se dan de alta desde /calidad/lotes/nuevo (o el import real de
   // producción) — no hay lotes de prueba en el seed.
