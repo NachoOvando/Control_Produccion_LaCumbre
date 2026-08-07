@@ -467,6 +467,11 @@ model PuntoControlLinea {
 
 enum FuenteOrigen {
   tablet
+  // Capturado en la tablet SIN red y sincronizado después. Se distingue de
+  // `tablet` porque el registro llegó al servidor con demora: la hora de captura
+  // la puso el dispositivo (falsificable) y el desvío de reloj se evalúa en
+  // lectura contra `createdAt`. Ver `capturadoEn`.
+  tablet_offline
   api_externa
   scada_opcua
   scada_mqtt
@@ -504,6 +509,14 @@ model RegistroCalidad {
   // dispositivo. Sin valor no hay protección de idempotencia, que es
   // exactamente el comportamiento previo.
   clientRequestId   String?      @unique @map("client_request_id") @db.Uuid
+  // Instante real de captura, con zona horaria, puesto por el dispositivo.
+  // `fecha`/`hora` NO se reemplazan: siguen siendo la verdad de captura para
+  // todo el reporting. Esta columna existe para poder calcular el desvío de
+  // reloj (`createdAt - capturadoEn`) — con captura offline la hora que pone la
+  // tablet es falsificable, y sin poder medir el desvío la calidad probatoria de
+  // todo el módulo se degrada. El umbral de "desvío sospechoso" es política y se
+  // evalúa en lectura, no se persiste.
+  capturadoEn       DateTime?    @map("capturado_en") @db.Timestamptz
   // Soft-delete: nunca se elimina físicamente un registro de calidad (HACCP)
   deletedAt         DateTime?    @map("deleted_at")
   deletedById       String?      @map("deleted_by_id") @db.Uuid

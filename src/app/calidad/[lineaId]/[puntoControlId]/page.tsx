@@ -1,5 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
+import { BannerCola } from "@/components/calidad/BannerCola";
 import { DefectosConformadoForm } from "@/components/calidad/DefectosConformadoForm";
 import { PesoMedicionesForm, type TipoFormularioPeso } from "@/components/calidad/PesoMedicionesForm";
 import { TemperaturaForm, type TipoFormularioTemp } from "@/components/calidad/TemperaturaForm";
@@ -201,6 +202,14 @@ export default async function RegistroPuntoControlPage({
       </header>
 
       <main className="max-w-2xl mx-auto px-4 pb-32 pt-4">
+        {/* Muestras capturadas sin red y pendientes de subir. Va arriba de todo y
+            para todos los puntos de control: un operario no puede terminar el
+            turno sin saber que tiene datos arriba del dispositivo. Si la cola está
+            vacía no renderiza nada. */}
+        <div className="mb-4">
+          <BannerCola />
+        </div>
+
         {pc.tipoFormulario === "defectos_conformado" ? (
           <DefectosConformadoForm
             puntoControlId={pc.id}

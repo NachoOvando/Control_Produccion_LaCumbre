@@ -30,7 +30,14 @@ const RegistroInputSchema = z.object({
   loteId: z.string().uuid("loteId debe ser UUID"),
   lineaProductivaId: z.string().uuid("lineaProductivaId debe ser UUID"),
   responsableId: z.string().uuid("responsableId debe ser UUID"),
-  fuenteOrigen: z.enum(["tablet", "api_externa", "scada_opcua", "scada_mqtt", "importacion"]).optional(),
+  fuenteOrigen: z
+    .enum(["tablet", "tablet_offline", "api_externa", "scada_opcua", "scada_mqtt", "importacion"])
+    .optional(),
+  // Instante real de captura con zona (ISO 8601), puesto por el DISPOSITIVO.
+  // Solo tiene sentido junto a `fuenteOrigen: "tablet_offline"`: sirve para
+  // calcular el desvío de reloj contra `createdAt` del servidor. No reemplaza
+  // `fecha`/`hora`, que siguen siendo la verdad de captura para el reporting.
+  capturadoEn: z.string().datetime({ offset: true }).optional(),
   fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "fecha debe tener formato YYYY-MM-DD"),
   hora: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/, "hora debe tener formato HH:mm o HH:mm:ss"),
   nroMuestra: z.number().int().min(1, "nroMuestra debe ser mayor a 0"),
@@ -161,12 +168,29 @@ export async function createRegistrosBatchService(
     return { ok: false, error: "Máximo 500 registros por batch", code: "BATCH_DEMASIADO_GRANDE" };
   }
 
-  // Inyectar responsableId y fuenteOrigen desde el servidor (no del cliente)
-  const itemsConResponsable = rawItems.map((item) => ({
-    ...(typeof item === "object" && item !== null ? item : {}),
-    responsableId,
-    fuenteOrigen,
-  }));
+  // `responsableId` SIEMPRE viene de la sesión del servidor — el cliente no
+  // puede suplantarlo.
+  //
+  // `fuenteOrigen` es distinto: el cliente sí necesita poder declarar que la
+  // muestra se capturó sin red (`tablet_offline`), porque el servidor no tiene
+  // forma de saberlo — le llega igual que cualquier otra. Pero se acota a los
+  // DOS valores de tablet: si se aceptara el enum completo, un cliente podría
+  // declarar sus registros como `scada_opcua` o `importacion` y contaminar la
+  // trazabilidad de procedencia, que es justo lo que esta columna existe para
+  // responder. Cualquier otro valor cae al que decide el servidor.
+  const FUENTES_DECLARABLES_POR_CLIENTE = new Set(["tablet", "tablet_offline"]);
+  const itemsConResponsable = rawItems.map((item) => {
+    const base = typeof item === "object" && item !== null ? (item as Record<string, unknown>) : {};
+    const declarada = base.fuenteOrigen;
+    return {
+      ...base,
+      responsableId,
+      fuenteOrigen:
+        typeof declarada === "string" && FUENTES_DECLARABLES_POR_CLIENTE.has(declarada)
+          ? declarada
+          : fuenteOrigen,
+    };
+  });
 
   // Validar estructura de cada item con Zod
   const parseResults = itemsConResponsable.map((item, idx) => {

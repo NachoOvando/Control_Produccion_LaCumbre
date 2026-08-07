@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { clavesDeCaptura, type ClavesDeCaptura, type RegistroParaHuella } from "@/lib/calidad/idempotencia";
 import { postConReintento } from "@/lib/calidad/envio-red";
+import { useColaSincronizacion } from "@/hooks/useColaSincronizacion";
+import type { RegistroPendiente } from "@/lib/offline/tipos";
 
 /**
  * Guardado en batch de registros de calidad, idempotente y con reintento.
@@ -30,6 +32,10 @@ export function useBatchGuardar(redirectTo = "/calidad", onExito?: () => void) {
   // nuevas — así la corrección no se pierde en silencio.
   const clavesRef = useRef<ClavesDeCaptura | null>(null);
 
+  // Cola durable en IndexedDB. Se expone hacia afuera para que el formulario
+  // pueda mostrar el contador de pendientes sin montar el hook por su cuenta.
+  const { estado: colaEstado, sincronizando, sincronizar, encolarMuestra } = useColaSincronizacion();
+
   const guardar = async (registros: Record<string, unknown>[]): Promise<boolean> => {
     setEnviando(true);
     setError(null);
@@ -44,9 +50,30 @@ export function useBatchGuardar(redirectTo = "/calidad", onExito?: () => void) {
 
       if (!res.ok) {
         if (res.motivo === "red") {
-          // El mensaje ya no promete que no se guardó nada: con idempotencia,
-          // reintentar es seguro incluso si el servidor alcanzó a commitear.
-          setError("Sin conexión con el servidor. Reintentá — si ya se guardó, no se va a duplicar.");
+          // Sin red la muestra NO se pierde: se guarda en la cola durable de la
+          // tablet y se sube sola cuando la red vuelve. Es seguro reintentar
+          // incluso si el servidor alcanzó a commitear, porque cada registro
+          // lleva su clientRequestId.
+          const encolada = await encolarMuestra(payload as unknown as RegistroPendiente[]);
+
+          if (encolada.ok) {
+            // Se trata como éxito a propósito: para el operario el dato está
+            // resguardado y puede seguir con la muestra siguiente. Decirle
+            // "error" acá lo empujaría a reintentar a mano una y otra vez sobre
+            // algo que ya está a salvo.
+            clavesRef.current = null;
+            setExito(true);
+            onExito?.();
+            setTimeout(() => router.push(redirectTo), 2000);
+            return true;
+          }
+
+          // La cola no aceptó la muestra (storage lleno o no disponible). Acá sí
+          // hay que frenar al operario: el dato solo existe en la pantalla.
+          setError(
+            "Sin conexión y la tablet no puede guardar más muestras. NO cierres esta pantalla — " +
+              "avisá a supervisión antes de seguir."
+          );
         } else {
           const json = res.json as { error?: string } | null;
           setError(json?.error ?? "Error al guardar los registros.");
@@ -66,5 +93,5 @@ export function useBatchGuardar(redirectTo = "/calidad", onExito?: () => void) {
     }
   };
 
-  return { enviando, error, exito, guardar };
+  return { enviando, error, exito, guardar, colaEstado, sincronizando, sincronizar };
 }

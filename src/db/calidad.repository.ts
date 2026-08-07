@@ -564,6 +564,7 @@ export async function createRegistroCalidad(input: RegistroCalidadInput) {
         filaProd: input.filaProd ?? null,
         notas: input.notas ?? null,
         clientRequestId: input.clientRequestId ?? null,
+        capturadoEn: input.capturadoEn ? new Date(input.capturadoEn) : null,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         data: dataConCorrelativoSincronizado(input.data, nroMuestra) as any,
       },
@@ -649,6 +650,7 @@ export async function createRegistrosBatchDB(inputs: RegistroCalidadInput[]): Pr
         filaProd: input.filaProd ?? null,
         notas: input.notas ?? null,
         clientRequestId: input.clientRequestId ?? null,
+        capturadoEn: input.capturadoEn ? new Date(input.capturadoEn) : null,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         data: dataConCorrelativoSincronizado(input.data, nroMuestra) as any,
       };

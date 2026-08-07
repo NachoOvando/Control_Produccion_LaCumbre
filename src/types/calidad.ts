@@ -36,6 +36,9 @@ export type RegistroCalidadInput = {
   // `clientRequestId` en prisma/schema.prisma. Opcional: los caminos internos
   // (seed, importaciones) no lo mandan y quedan con el comportamiento previo.
   clientRequestId?: string;
+  // Instante real de captura (ISO 8601 con offset), puesto por el dispositivo.
+  // Presente solo en el camino offline — habilita el cálculo del desvío de reloj.
+  capturadoEn?: string;
   data: Record<string, unknown>;
 };
 
